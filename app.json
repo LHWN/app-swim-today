@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "오늘도수영",
+    "slug": "oneuldo-swim",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "oneuldoswim",
+    "splash": {
+      "image": "./logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.oneuldoswim.app",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "공지사항에 첨부할 이미지를 선택하기 위해 사진 접근 권한이 필요합니다."
+      }
+    },
+    "android": {
+      "package": "com.oneuldoswim.app"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-notifications",
+      "expo-image-picker",
+      "expo-status-bar",
+      "expo-font"
+    ]
+  }
+}
