@@ -1,8 +1,11 @@
-import { ClassSlot, DayOption, NotificationPrefs, Notice, ReservationPerson, User } from './types';
+import { ClassSlot, DayId, DayOption, NotificationPrefs, Notice } from './types';
 
-export const CURRENT_SCHEDULE_VERSION = 5;
+export const CURRENT_SCHEDULE_VERSION = 6;
+export const DISPLAY_DAYS = 14;
+export const SYNC_DAYS = 28;
+export const APP_TIME_ZONE = 'Asia/Seoul';
 
-export const DAYS: DayOption[] = [
+export const DAYS: Array<{ id: DayId; label: string; shortLabel: string }> = [
   { id: 'mon', label: '월요일', shortLabel: '월' },
   { id: 'tue', label: '화요일', shortLabel: '화' },
   { id: 'wed', label: '수요일', shortLabel: '수' },
@@ -15,16 +18,198 @@ export const DAYS: DayOption[] = [
 const WEEKDAY_HOURS = Array.from({ length: 18 }, (_, index) => index + 6);
 const WEEKEND_HOURS = Array.from({ length: 10 }, (_, index) => index + 9);
 
-function isWeekend(dayId: DayOption['id']) {
-  return dayId === 'sat' || dayId === 'sun';
+const datePartsFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: APP_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit'
+});
+
+const weekdayFormatter = new Intl.DateTimeFormat('ko-KR', {
+  timeZone: APP_TIME_ZONE,
+  weekday: 'short'
+});
+
+const dateLabelFormatter = new Intl.DateTimeFormat('ko-KR', {
+  timeZone: APP_TIME_ZONE,
+  month: 'long',
+  day: 'numeric',
+  weekday: 'short'
+});
+
+const shortDateFormatter = new Intl.DateTimeFormat('ko-KR', {
+  timeZone: APP_TIME_ZONE,
+  month: 'numeric',
+  day: 'numeric'
+});
+
+const hourFormatter = new Intl.DateTimeFormat('ko-KR', {
+  timeZone: APP_TIME_ZONE,
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23'
+});
+
+export const defaultPrefs: NotificationPrefs = {
+  classSoon: true,
+  reservation: true,
+  notice: true,
+  attendance: true,
+  classChange: true,
+  rebook: true
+};
+
+export function getDateKey(value: Date | string) {
+  const date = typeof value === 'string' ? new Date(value) : value;
+
+  return datePartsFormatter.format(date);
 }
 
-function getHoursForDay(dayId: DayOption['id']) {
-  return isWeekend(dayId) ? WEEKEND_HOURS : WEEKDAY_HOURS;
+export function getTodayKey() {
+  return getDateKey(new Date());
 }
 
-function getInstructor(dayId: DayOption['id'], hour: number) {
-  if (isWeekend(dayId)) {
+export function addDays(dateKey: string, days: number) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + days, 0, 0, 0));
+
+  return getDateKey(date);
+}
+
+export function formatSlotHour(startsAt: string) {
+  return hourFormatter.format(new Date(startsAt));
+}
+
+export function getSlotTimeParts(startsAt: string) {
+  const [hourText, minuteText] = formatSlotHour(startsAt).split(':');
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+
+  return {
+    hour: Number.isFinite(hour) ? hour : 0,
+    minute: Number.isFinite(minute) ? minute : 0
+  };
+}
+
+export function formatSlotDate(startsAt: string) {
+  return dateLabelFormatter.format(new Date(startsAt));
+}
+
+export function formatShortSlotDate(startsAt: string) {
+  return shortDateFormatter.format(new Date(startsAt));
+}
+
+export function getSlotWeekday(startsAt: string) {
+  return weekdayFormatter.format(new Date(startsAt));
+}
+
+export function getWeekdayLabel(weekday: number) {
+  return DAYS[weekday - 1]?.label ?? '';
+}
+
+export function getWeekdayShortLabel(weekday: number) {
+  return DAYS[weekday - 1]?.shortLabel ?? '';
+}
+
+export function getDateOptions(slots: ClassSlot[]): DayOption[] {
+  const seen = new Set<string>();
+
+  return slots.reduce<DayOption[]>((options, slot) => {
+    if (seen.has(slot.date)) {
+      return options;
+    }
+
+    seen.add(slot.date);
+    options.push({
+      id: slot.date,
+      label: slot.dateLabel,
+      shortLabel: slot.weekdayLabel,
+      caption: slot.shortDateLabel
+    });
+
+    return options;
+  }, []);
+}
+
+export function sortSlotsByStartsAt(a: ClassSlot, b: ClassSlot) {
+  return new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime();
+}
+
+export function createSlotFromRemote({
+  id,
+  startsAt,
+  instructor,
+  capacity,
+  durationMinutes = 60,
+  isActive = true
+}: {
+  id: string;
+  startsAt: string;
+  instructor: string;
+  capacity: number;
+  durationMinutes?: number;
+  isActive?: boolean;
+}): ClassSlot {
+  const timeParts = getSlotTimeParts(startsAt);
+
+  return {
+    id,
+    date: getDateKey(startsAt),
+    dateLabel: formatSlotDate(startsAt),
+    shortDateLabel: formatShortSlotDate(startsAt),
+    weekdayLabel: getSlotWeekday(startsAt),
+    hour: timeParts.hour,
+    minute: timeParts.minute,
+    startMinutes: timeParts.hour * 60 + timeParts.minute,
+    startsAt,
+    instructor,
+    capacity,
+    durationMinutes,
+    isActive,
+    fixedLessonIds: [],
+    fixedMembers: [],
+    absences: [],
+    substitutes: [],
+    openSeatCount: 0,
+    fixedLessonId: null,
+    fixedMember: null,
+    absence: null,
+    substituteBy: null,
+    reservedBy: null,
+    waitlist: []
+  };
+}
+
+export function createInitialSlots(): ClassSlot[] {
+  const today = getTodayKey();
+
+  return Array.from({ length: DISPLAY_DAYS }, (_, dayOffset) => addDays(today, dayOffset)).flatMap((dateKey) => {
+    const [year, month, day] = dateKey.split('-').map(Number);
+    const dayOfWeek = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+    const weekend = dayOfWeek === 0 || dayOfWeek === 6;
+    const hours = weekend ? WEEKEND_HOURS : WEEKDAY_HOURS;
+
+    return hours.map((hour) => {
+      const startsAt = new Date(Date.UTC(year, month - 1, day, hour - 9, 0, 0)).toISOString();
+      const instructor = getInstructor(startsAt);
+
+      return createSlotFromRemote({
+        id: `local-${dateKey}-${hour}`,
+        startsAt,
+        instructor,
+        capacity: 1
+      });
+    });
+  });
+}
+
+function getInstructor(startsAt: string) {
+  const date = new Date(startsAt);
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: APP_TIME_ZONE, weekday: 'short' }).format(date);
+  const { hour } = getSlotTimeParts(startsAt);
+  const weekend = weekday === 'Sat' || weekday === 'Sun';
+
+  if (weekend) {
     return hour <= 13 ? '신준혁' : '이혜원';
   }
 
@@ -43,66 +228,6 @@ function getInstructor(dayId: DayOption['id'], hour: number) {
   return '한승빈';
 }
 
-export const defaultPrefs: NotificationPrefs = {
-  classSoon: true,
-  reservation: true,
-  notice: true,
-  attendance: true,
-  classChange: true,
-  rebook: true
-};
-
-export function createInitialSlots(): ClassSlot[] {
-  return DAYS.flatMap((day, dayIndex) =>
-    getHoursForDay(day.id).map((hour, hourIndex) => {
-      return {
-        id: `${day.id}-${hour}`,
-        day: day.id,
-        hour,
-        instructor: getInstructor(day.id, hour),
-        reservedBy: null,
-        waitlist: []
-      };
-    })
-  );
-}
-
-function createLegacyReservation(user?: User | null): ReservationPerson {
-  return {
-    userId: user?.id ?? 'legacy-member',
-    userName: user?.name ?? '회원',
-    createdAt: new Date().toISOString()
-  };
-}
-
-export function mergeSlotsWithCurrentSchedule(savedSlots?: ClassSlot[], user?: User | null) {
-  const savedById = new Map((savedSlots ?? []).map((slot) => [slot.id, slot]));
-
-  return createInitialSlots().map((slot) => {
-    const saved = savedById.get(slot.id) as (ClassSlot & { reservedByMe?: boolean; waitlist?: number | ReservationPerson[] }) | undefined;
-
-    return {
-      ...slot,
-      reservedBy: saved?.reservedBy ?? (saved?.reservedByMe ? createLegacyReservation(user) : null),
-      waitlist: Array.isArray(saved?.waitlist) ? saved.waitlist : []
-    };
-  });
-}
-
-export function slotsMatchCurrentSchedule(slots: ClassSlot[]) {
-  const currentSlots = createInitialSlots();
-  const currentById = new Map(currentSlots.map((slot) => [slot.id, slot]));
-
-  if (slots.length !== currentSlots.length) {
-    return false;
-  }
-
-  return slots.every((slot) => {
-    const current = currentById.get(slot.id);
-    return current?.instructor === slot.instructor;
-  });
-}
-
 export const initialNotices: Notice[] = [
   {
     id: 'notice-water-quality',
@@ -113,8 +238,8 @@ export const initialNotices: Notice[] = [
   },
   {
     id: 'notice-small-lesson',
-    title: '예약 운영 안내',
-    body: '한 타임은 한 회원이 예약하면 마감됩니다. 이미 예약된 시간은 대기 등록을 이용해주세요.',
+    title: '대체 예약 운영 안내',
+    body: '고정 수업 회원이 결석 처리한 시간만 빈자리로 열립니다. 열린 시간은 다른 회원이 대체 예약할 수 있습니다.',
     author: '관리자',
     createdAt: new Date('2026-06-08T11:30:00+09:00').toISOString()
   }

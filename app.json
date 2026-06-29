@@ -3,6 +3,7 @@
     "name": "오늘도수영",
     "slug": "oneuldo-swim",
     "version": "0.1.0",
+    "icon": "./assets/app-icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "scheme": "oneuldoswim",
@@ -13,9 +14,11 @@
     },
     "ios": {
       "supportsTablet": false,
+      "buildNumber": "1",
       "bundleIdentifier": "com.oneuldoswim.app",
       "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "공지사항에 첨부할 이미지를 선택하기 위해 사진 접근 권한이 필요합니다."
+        "NSPhotoLibraryUsageDescription": "공지사항과 특별수업에 첨부할 이미지를 선택하기 위해 사진 접근 권한이 필요합니다.",
+        "NSPhotoLibraryAddUsageDescription": "첨부 이미지를 저장하거나 관리하기 위해 사진 보관함 접근 권한이 필요합니다."
       }
     },
     "android": {
