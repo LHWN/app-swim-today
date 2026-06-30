@@ -107,6 +107,8 @@ import {
 const LEGACY_STORAGE_KEY = 'oneuldo-swim-state-v3';
 const SETTINGS_STORAGE_KEY = 'oneuldo-swim-settings-v1';
 const CONTACT_PHONE = '010-4698-3505';
+const PRIVACY_POLICY_URL = 'https://github.com/LHWN/app-swim-today/blob/main/docs/privacy-policy.md';
+const ACCOUNT_DELETION_URL = 'https://github.com/LHWN/app-swim-today/blob/main/docs/account-deletion.md';
 const DEFAULT_PASS_BALANCE = 12;
 const brandLogoImage = require('./logo.png');
 const logoOnNavyImage = require('./logo-on-navy.png');
@@ -374,6 +376,17 @@ async function openFeedbackMedia(uri: string) {
   }
 
   await Linking.openURL(uri);
+}
+
+async function openExternalUrl(url: string, fallbackTitle: string) {
+  const canOpen = await Linking.canOpenURL(url);
+
+  if (!canOpen) {
+    Alert.alert(fallbackTitle, url);
+    return;
+  }
+
+  await Linking.openURL(url);
 }
 
 async function notifyAssignmentRequestChanges(
@@ -4360,6 +4373,21 @@ function ProfileScreen({
         <InfoRow icon="phone" label="휴대폰" value={formatPhoneNumber(user.phone)} />
         <InfoRow icon="phone" label="문의" value={CONTACT_PHONE} onPress={callContact} />
         <InfoRow icon="smartphone" label="앱 버전" value={Platform.OS === 'ios' ? 'iOS 테스트' : '모바일 테스트'} />
+      </View>
+
+      <View style={styles.infoList}>
+        <InfoRow
+          icon="shield"
+          label="개인정보 처리방침"
+          value="보기"
+          onPress={() => openExternalUrl(PRIVACY_POLICY_URL, '개인정보 처리방침')}
+        />
+        <InfoRow
+          icon="trash-2"
+          label="계정 삭제 안내"
+          value="보기"
+          onPress={() => openExternalUrl(ACCOUNT_DELETION_URL, '계정 삭제 안내')}
+        />
       </View>
 
       <Pressable style={styles.logoutButton} onPress={onLogout}>

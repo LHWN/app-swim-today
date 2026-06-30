@@ -18,11 +18,16 @@
       "bundleIdentifier": "com.oneuldoswim.app",
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "공지사항과 특별수업에 첨부할 이미지를 선택하기 위해 사진 접근 권한이 필요합니다.",
-        "NSPhotoLibraryAddUsageDescription": "첨부 이미지를 저장하거나 관리하기 위해 사진 보관함 접근 권한이 필요합니다."
+        "NSPhotoLibraryAddUsageDescription": "첨부 이미지를 저장하거나 관리하기 위해 사진 보관함 접근 권한이 필요합니다.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
-      "package": "com.oneuldoswim.app"
+      "package": "com.oneuldoswim.app",
+      "versionCode": 1,
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -30,9 +35,21 @@
     },
     "plugins": [
       "expo-notifications",
-      "expo-image-picker",
-      "expo-status-bar",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "공지사항, 특별수업 포스터, 수업 피드백에 첨부할 이미지를 선택하기 위해 사진 접근 권한이 필요합니다.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
       "expo-font"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "747267c4-ca68-4cbc-b5bc-5d98d8bd734e"
+      }
+    },
+    "owner": "lhwn_lee"
   }
 }
