@@ -146,8 +146,10 @@ import {
 const LEGACY_STORAGE_KEY = 'oneuldo-swim-state-v3';
 const SETTINGS_STORAGE_KEY = 'oneuldo-swim-settings-v1';
 const CONTACT_PHONE = '010-4698-3505';
-const PRIVACY_POLICY_URL = 'https://github.com/LHWN/app-swim-today/blob/main/docs/privacy-policy.md';
-const ACCOUNT_DELETION_URL = 'https://github.com/LHWN/app-swim-today/blob/main/docs/account-deletion.md';
+// const PRIVACY_POLICY_URL = 'https://github.com/LHWN/app-swim-today/blob/main/docs/privacy-policy.md';
+// const ACCOUNT_DELETION_URL = 'https://github.com/LHWN/app-swim-today/blob/main/docs/account-deletion.md';
+const PRIVACY_POLICY_URL = 'https://lhwn.github.io/app-swim-today/privacy-policy.html';
+const ACCOUNT_DELETION_URL = 'https://lhwn.github.io/app-swim-today/account-deletion.html';
 const DEFAULT_PASS_BALANCE = 12;
 const POOL_OPEN_HOUR = 5;
 const POOL_CLOSE_HOUR = 22;
