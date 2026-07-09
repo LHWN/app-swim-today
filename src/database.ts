@@ -1,10 +1,12 @@
-import { createSlotFromRemote, getTodayKey, getWeekdayLabel, SYNC_DAYS } from './data';
+import { addDays, createSlotFromRemote, getTodayKey, getWeekdayLabel, SYNC_DAYS, SYNC_PAST_DAYS } from './data';
 import { assertSupabaseConfig, supabase } from './supabase';
 import {
   AbsenceAction,
   AuthProvider,
   ClassSlot,
   FixedLesson,
+  InstructorLessonTime,
+  LessonAbsenceRequest,
   LessonFeedback,
   LessonFeedbackMediaType,
   LessonFeedbackTarget,
@@ -12,6 +14,8 @@ import {
   LessonAssignmentRequestType,
   LessonChangeRequest,
   LessonChangeRequestStatus,
+  MemberRequest,
+  MemberRequestStatus,
   MemberSummary,
   Notice,
   PassTransaction,
@@ -20,6 +24,9 @@ import {
   SpecialLesson,
   SpecialLessonRegistration,
   SpecialLessonRegistrationStatus,
+  StoreOrder,
+  StoreOrderStatus,
+  StoreProduct,
   User,
   UserRole
 } from './types';
@@ -49,6 +56,7 @@ interface ReservationSnapshotRow {
   is_active: boolean;
   fixed_lesson_id: string | null;
   fixed_lesson_capacity: number | null;
+  fixed_lesson_duration_minutes: number | null;
   fixed_user_id: string | null;
   fixed_user_name: string | null;
   absence_user_id: string | null;
@@ -56,6 +64,7 @@ interface ReservationSnapshotRow {
   absence_created_at: string | null;
   substitute_user_id: string | null;
   substitute_user_name: string | null;
+  substitute_duration_minutes: number | null;
   substitute_created_at: string | null;
 }
 
@@ -83,7 +92,18 @@ interface FixedLessonRow {
   slot_hour: number;
   slot_minute: number;
   instructor: string;
+  duration_minutes: number;
   lesson_capacity: number;
+}
+
+interface InstructorLessonTimeRow {
+  id: string;
+  instructor: string;
+  weekday: number;
+  slot_hour: number;
+  slot_minute: number;
+  created_at: string;
+  updated_at: string;
 }
 
 interface NoticeRow {
@@ -122,6 +142,19 @@ interface LessonChangeRequestRow {
   reviewed_by_name: string | null;
 }
 
+interface LessonAbsenceRequestRow {
+  id: string;
+  user_id: string;
+  user_name: string;
+  slot_id: string;
+  starts_at: string;
+  instructor: string;
+  status: LessonChangeRequestStatus;
+  created_at: string;
+  reviewed_at: string | null;
+  reviewed_by_name: string | null;
+}
+
 interface LessonAssignmentRequestRow {
   id: string;
   user_id: string;
@@ -134,6 +167,7 @@ interface LessonAssignmentRequestRow {
   created_at: string;
   reviewed_at: string | null;
   reviewed_by_name: string | null;
+  review_comment: string;
 }
 
 interface LessonFeedbackRow {
@@ -200,6 +234,46 @@ interface SpecialLessonRegistrationRow {
   reviewed_by_name: string | null;
 }
 
+interface MemberRequestRow {
+  id: string;
+  user_id: string;
+  user_name: string;
+  title: string;
+  body: string;
+  status: MemberRequestStatus;
+  admin_reply: string;
+  created_at: string;
+  reviewed_at: string | null;
+  reviewed_by_name: string | null;
+}
+
+interface StoreProductRow {
+  id: string;
+  name: string;
+  description: string;
+  image_path: string | null;
+  price: number;
+  stock_quantity: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+interface StoreOrderRow {
+  id: string;
+  product_id: string;
+  product_name: string;
+  user_id: string;
+  user_name: string;
+  quantity: number;
+  unit_price: number;
+  total_price: number;
+  status: StoreOrderStatus;
+  admin_comment: string;
+  created_at: string;
+  reviewed_at: string | null;
+  reviewed_by_name: string | null;
+}
+
 export interface SignUpInput {
   name: string;
   email: string;
@@ -225,6 +299,31 @@ export interface CreateSpecialLessonInput {
   capacity: number;
 }
 
+export interface UpdateSpecialLessonInput extends CreateSpecialLessonInput {
+  id: string;
+}
+
+export interface CreateMemberRequestInput {
+  title: string;
+  body: string;
+}
+
+export interface CreateStoreProductInput {
+  name: string;
+  description: string;
+  imageUri?: string;
+  price: number;
+  stockQuantity: number;
+}
+
+export interface SaveInstructorLessonTimeInput {
+  id?: string | null;
+  instructor: string;
+  weekday: number;
+  hour: number;
+  minute: number;
+}
+
 export interface ReservationUpdate {
   action: ReservationAction;
   slots: ClassSlot[];
@@ -235,12 +334,21 @@ export interface AbsenceUpdate {
   action: AbsenceAction;
   slots: ClassSlot[];
   user: User;
+  requests: LessonAbsenceRequest[];
 }
 
 export interface PublishNoticeInput {
   title: string;
   body: string;
   imageUri?: string;
+}
+
+export interface UpdateNoticeInput {
+  id: string;
+  title: string;
+  body: string;
+  imageUri?: string;
+  replaceImage?: boolean;
 }
 
 export class DatabaseError extends Error {
@@ -453,15 +561,49 @@ export async function getMyFixedLessons() {
     startMinutes: row.slot_hour * 60 + (row.slot_minute ?? 0),
     timeLabel: formatTimeLabel(row.slot_hour, row.slot_minute ?? 0),
     instructor: row.instructor,
+    durationMinutes: row.duration_minutes ?? 60,
     lessonCapacity: row.lesson_capacity ?? 1
   }));
 }
 
-export async function getSlotsFromDatabase() {
+export async function getInstructorLessonTimes() {
+  await initializeDatabase();
+
+  const { data, error } = await supabase.rpc('get_instructor_lesson_times').returns<InstructorLessonTimeRow[]>();
+
+  if (error) {
+    const normalizedMessage = error.message.toLowerCase();
+
+    if (
+      normalizedMessage.includes('could not find the function') ||
+      normalizedMessage.includes('schema cache') ||
+      normalizedMessage.includes('does not exist')
+    ) {
+      return [];
+    }
+
+    throw toDatabaseError(error.message);
+  }
+
+  return ((data ?? []) as InstructorLessonTimeRow[]).map<InstructorLessonTime>((row) => ({
+    id: row.id,
+    instructor: row.instructor,
+    weekday: row.weekday,
+    weekdayLabel: getWeekdayLabel(row.weekday),
+    hour: row.slot_hour,
+    minute: row.slot_minute ?? 0,
+    startMinutes: row.slot_hour * 60 + (row.slot_minute ?? 0),
+    timeLabel: formatTimeLabel(row.slot_hour, row.slot_minute ?? 0),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }));
+}
+
+async function getSlotsSnapshot(startDate: string, days: number) {
   await initializeDatabase();
 
   const { data, error } = await supabase
-    .rpc('get_lesson_slots_snapshot', { p_start_date: getTodayKey(), p_days: SYNC_DAYS })
+    .rpc('get_lesson_slots_snapshot', { p_start_date: startDate, p_days: days })
     .returns<ReservationSnapshotRow[]>();
 
   if (error) {
@@ -496,7 +638,8 @@ export async function getSlotsFromDatabase() {
         userName: row.fixed_user_name,
         createdAt: row.starts_at,
         fixedLessonId: row.fixed_lesson_id,
-        lessonCapacity: row.fixed_lesson_capacity
+        lessonCapacity: row.fixed_lesson_capacity,
+        durationMinutes: row.fixed_lesson_duration_minutes ?? row.duration_minutes ?? 60
       };
 
       if (!slot.fixedMembers.some((member) => member.userId === person.userId && member.userName === person.userName)) {
@@ -520,7 +663,8 @@ export async function getSlotsFromDatabase() {
       const person: ReservationPerson = {
         userId: row.substitute_user_id ?? '',
         userName: row.substitute_user_name ?? '회원',
-        createdAt: row.substitute_created_at
+        createdAt: row.substitute_created_at,
+        durationMinutes: row.substitute_duration_minutes ?? row.duration_minutes ?? 60
       };
 
       if (!slot.substitutes.some((substitute) => substitute.createdAt === person.createdAt && substitute.userName === person.userName)) {
@@ -541,6 +685,14 @@ export async function getSlotsFromDatabase() {
   });
 }
 
+export function getSlotsFromDatabase() {
+  return getSlotsSnapshot(getTodayKey(), SYNC_DAYS);
+}
+
+export function getPastSlotsFromDatabase() {
+  return getSlotsSnapshot(addDays(getTodayKey(), -SYNC_PAST_DAYS), SYNC_PAST_DAYS);
+}
+
 export async function toggleFixedLessonAbsence(slotId: string, memberId: string): Promise<AbsenceUpdate> {
   await initializeDatabase();
 
@@ -550,13 +702,56 @@ export async function toggleFixedLessonAbsence(slotId: string, memberId: string)
     throw toDatabaseError(error.message);
   }
 
-  const [slots, user] = await Promise.all([getSlotsFromDatabase(), getMemberById(memberId)]);
+  const [slots, user, requests] = await Promise.all([getSlotsFromDatabase(), getMemberById(memberId), getLessonAbsenceRequests()]);
 
   if (!user) {
     throw new DatabaseError('UNKNOWN', '예약 변경 결과를 불러오지 못했습니다.');
   }
 
-  return { action: data as AbsenceAction, slots, user };
+  return { action: data as AbsenceAction, slots, user, requests };
+}
+
+export async function getLessonAbsenceRequests() {
+  await initializeDatabase();
+
+  const { data, error } = await supabase.rpc('get_lesson_absence_requests').returns<LessonAbsenceRequestRow[]>();
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  return ((data ?? []) as LessonAbsenceRequestRow[]).map(mapLessonAbsenceRequestRow);
+}
+
+export async function cancelLessonAbsenceRequest(requestId: string) {
+  await initializeDatabase();
+
+  const { error } = await supabase.rpc('cancel_lesson_absence_request', {
+    p_request_id: requestId
+  });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  return getLessonAbsenceRequests();
+}
+
+export async function reviewLessonAbsenceRequest(requestId: string, approved: boolean) {
+  await initializeDatabase();
+
+  const { error } = await supabase.rpc('review_lesson_absence_request', {
+    p_request_id: requestId,
+    p_approved: approved
+  });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  const [members, slots, requests] = await Promise.all([getMemberSummaries(), getSlotsFromDatabase(), getLessonAbsenceRequests()]);
+
+  return { members, slots, requests };
 }
 
 export async function toggleOpenSlotReservation(slotId: string, memberId: string): Promise<ReservationUpdate> {
@@ -616,11 +811,18 @@ export async function updateMemberPassProduct(memberId: string, lessonCapacity: 
   return getMemberSummaries();
 }
 
-export async function upsertFixedLesson(memberId: string, weekday: number, hour: number, minute: number, instructor = '') {
+export async function upsertFixedLesson(
+  memberId: string,
+  weekday: number,
+  hour: number,
+  minute: number,
+  durationMinutes = 60,
+  instructor = ''
+) {
   await initializeDatabase();
 
-  if (weekday < 1 || weekday > 7 || hour < 0 || hour > 23 || ![0, 30].includes(minute)) {
-    throw new DatabaseError('INVALID_INPUT', '요일과 시간을 확인해주세요.');
+  if (weekday < 1 || weekday > 7 || hour < 0 || hour > 23 || ![0, 30].includes(minute) || ![30, 60].includes(durationMinutes)) {
+    throw new DatabaseError('INVALID_INPUT', '요일, 시간, 수업 길이를 확인해주세요.');
   }
 
   const { error } = await supabase.rpc('upsert_fixed_lesson', {
@@ -628,7 +830,8 @@ export async function upsertFixedLesson(memberId: string, weekday: number, hour:
     p_weekday: weekday,
     p_slot_hour: hour,
     p_slot_minute: minute,
-    p_instructor: instructor.trim()
+    p_instructor: instructor.trim(),
+    p_duration_minutes: durationMinutes
   });
 
   if (error) {
@@ -640,11 +843,18 @@ export async function upsertFixedLesson(memberId: string, weekday: number, hour:
   return { members, slots };
 }
 
-export async function updateFixedLesson(fixedLessonId: string, weekday: number, hour: number, minute: number, instructor = '') {
+export async function updateFixedLesson(
+  fixedLessonId: string,
+  weekday: number,
+  hour: number,
+  minute: number,
+  durationMinutes = 60,
+  instructor = ''
+) {
   await initializeDatabase();
 
-  if (!fixedLessonId || weekday < 1 || weekday > 7 || hour < 0 || hour > 23 || ![0, 30].includes(minute)) {
-    throw new DatabaseError('INVALID_INPUT', '수정할 고정 수업, 요일, 시간을 확인해주세요.');
+  if (!fixedLessonId || weekday < 1 || weekday > 7 || hour < 0 || hour > 23 || ![0, 30].includes(minute) || ![30, 60].includes(durationMinutes)) {
+    throw new DatabaseError('INVALID_INPUT', '수정할 고정 수업, 요일, 시간, 수업 길이를 확인해주세요.');
   }
 
   const { error } = await supabase.rpc('update_fixed_lesson', {
@@ -652,7 +862,8 @@ export async function updateFixedLesson(fixedLessonId: string, weekday: number, 
     p_weekday: weekday,
     p_slot_hour: hour,
     p_slot_minute: minute,
-    p_instructor: instructor.trim()
+    p_instructor: instructor.trim(),
+    p_duration_minutes: durationMinutes
   });
 
   if (error) {
@@ -684,6 +895,27 @@ export async function cancelFixedLesson(fixedLessonId: string) {
   return { members, slots };
 }
 
+export async function cancelFixedLessonAttendance(slotId: string, fixedLessonId: string) {
+  await initializeDatabase();
+
+  if (!slotId || !fixedLessonId) {
+    throw new DatabaseError('INVALID_INPUT', '제외할 수업과 고정 회원을 확인해주세요.');
+  }
+
+  const { error } = await supabase.rpc('admin_cancel_fixed_lesson_attendance', {
+    p_slot_id: slotId,
+    p_fixed_lesson_id: fixedLessonId
+  });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  const [members, slots] = await Promise.all([getMemberSummaries(), getSlotsFromDatabase()]);
+
+  return { members, slots };
+}
+
 export async function updateLessonSlotInstructor(slotId: string, instructor: string) {
   await initializeDatabase();
 
@@ -703,6 +935,65 @@ export async function updateLessonSlotInstructor(slotId: string, instructor: str
   const [members, slots] = await Promise.all([getMemberSummaries(), getSlotsFromDatabase()]);
 
   return { members, slots };
+}
+
+export async function saveInstructorLessonTime(input: SaveInstructorLessonTimeInput) {
+  await initializeDatabase();
+
+  if (
+    input.weekday < 1 ||
+    input.weekday > 7 ||
+    input.hour < 0 ||
+    input.hour > 23 ||
+    ![0, 30].includes(input.minute) ||
+    !input.instructor.trim()
+  ) {
+    throw new DatabaseError('INVALID_INPUT', '강사, 요일, 시간을 확인해주세요.');
+  }
+
+  const { error } = await supabase.rpc('upsert_instructor_lesson_time', {
+    p_time_id: input.id ?? null,
+    p_instructor: input.instructor.trim(),
+    p_weekday: input.weekday,
+    p_slot_hour: input.hour,
+    p_slot_minute: input.minute
+  });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  const [instructorLessonTimes, members, slots] = await Promise.all([
+    getInstructorLessonTimes(),
+    getMemberSummaries(),
+    getSlotsFromDatabase()
+  ]);
+
+  return { instructorLessonTimes, members, slots };
+}
+
+export async function cancelInstructorLessonTime(timeId: string) {
+  await initializeDatabase();
+
+  if (!timeId) {
+    throw new DatabaseError('INVALID_INPUT', '삭제할 강사 배정 시간을 확인해주세요.');
+  }
+
+  const { error } = await supabase.rpc('cancel_instructor_lesson_time', {
+    p_time_id: timeId
+  });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  const [instructorLessonTimes, members, slots] = await Promise.all([
+    getInstructorLessonTimes(),
+    getMemberSummaries(),
+    getSlotsFromDatabase()
+  ]);
+
+  return { instructorLessonTimes, members, slots };
 }
 
 export async function createLessonSlot(slotDate: string, hour: number, minute: number, instructor: string, durationMinutes: number) {
@@ -752,16 +1043,17 @@ export async function updateLessonSlotDetails(slotId: string, instructor: string
   return { members, slots };
 }
 
-export async function assignLessonReservation(slotId: string, memberId: string) {
+export async function assignLessonReservation(slotId: string, memberId: string, durationMinutes = 60) {
   await initializeDatabase();
 
-  if (!slotId || !memberId) {
-    throw new DatabaseError('INVALID_INPUT', '배정할 수업과 회원을 확인해주세요.');
+  if (!slotId || !memberId || ![30, 60].includes(durationMinutes)) {
+    throw new DatabaseError('INVALID_INPUT', '배정할 수업, 회원, 수업 길이를 확인해주세요.');
   }
 
   const { error } = await supabase.rpc('admin_assign_lesson_reservation', {
     p_slot_id: slotId,
-    p_user_id: memberId
+    p_user_id: memberId,
+    p_duration_minutes: durationMinutes
   });
 
   if (error) {
@@ -826,10 +1118,11 @@ export async function getLessonChangeRequests() {
   return ((data ?? []) as LessonChangeRequestRow[]).map(mapLessonChangeRequestRow);
 }
 
-export async function createLessonChangeRequest(targetSlotId: string) {
+export async function createLessonChangeRequest(sourceSlotId: string, targetSlotId: string) {
   await initializeDatabase();
 
   const { error } = await supabase.rpc('create_lesson_change_request', {
+    p_source_slot_id: sourceSlotId,
     p_target_slot_id: targetSlotId
   });
 
@@ -912,13 +1205,50 @@ export async function cancelLessonAssignmentRequest(requestId: string) {
   return getLessonAssignmentRequests();
 }
 
-export async function reviewLessonAssignmentRequest(requestId: string, approved: boolean) {
+export async function cancelMyLessonReservation(slotId: string, memberId: string) {
   await initializeDatabase();
 
-  const { error } = await supabase.rpc('review_lesson_assignment_request', {
-    p_request_id: requestId,
-    p_approved: approved
+  if (!slotId || !memberId) {
+    throw new DatabaseError('INVALID_INPUT', '취소할 수업을 확인해주세요.');
+  }
+
+  const { error } = await supabase.rpc('cancel_my_lesson_reservation', {
+    p_slot_id: slotId
   });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  const [slots, user, assignmentRequests] = await Promise.all([
+    getSlotsFromDatabase(),
+    getMemberById(memberId),
+    getLessonAssignmentRequests()
+  ]);
+
+  if (!user) {
+    throw new DatabaseError('UNKNOWN', '수업 취소 결과를 불러오지 못했습니다.');
+  }
+
+  return { slots, user, assignmentRequests };
+}
+
+export async function reviewLessonAssignmentRequest(requestId: string, approved: boolean, comment = '') {
+  await initializeDatabase();
+
+  let { error } = await supabase.rpc('review_lesson_assignment_request', {
+    p_request_id: requestId,
+    p_approved: approved,
+    p_review_comment: comment.trim()
+  });
+
+  if (error && /p_review_comment|schema cache|function public\.review_lesson_assignment_request/i.test(error.message)) {
+    const fallback = await supabase.rpc('review_lesson_assignment_request', {
+      p_request_id: requestId,
+      p_approved: approved
+    });
+    error = fallback.error;
+  }
 
   if (error) {
     throw toDatabaseError(error.message);
@@ -1044,6 +1374,36 @@ export async function createSpecialLesson(input: CreateSpecialLessonInput) {
   return { specialLessons, registrations };
 }
 
+export async function updateSpecialLesson(input: UpdateSpecialLessonInput) {
+  await initializeDatabase();
+
+  const title = input.title.trim();
+
+  if (!input.id || !title) {
+    throw new DatabaseError('INVALID_INPUT', '수정할 특별수업과 수업명을 확인해주세요.');
+  }
+
+  const imagePath = input.imageUri ? await uploadSpecialLessonImage(input.imageUri) : null;
+  const { error } = await supabase.rpc('update_special_lesson', {
+    p_special_lesson_id: input.id,
+    p_title: title,
+    p_description: input.description.trim(),
+    p_starts_at: input.startsAt,
+    p_instructor: input.instructor.trim(),
+    p_duration_minutes: input.durationMinutes,
+    p_capacity: input.capacity,
+    p_image_path: imagePath
+  });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  const [specialLessons, registrations] = await Promise.all([getSpecialLessons(), getSpecialLessonRegistrations()]);
+
+  return { specialLessons, registrations };
+}
+
 export async function applySpecialLesson(specialLessonId: string) {
   await initializeDatabase();
 
@@ -1097,6 +1457,169 @@ export async function reviewSpecialLessonRegistration(registrationId: string, ap
   return { specialLessons, registrations };
 }
 
+export async function getMemberRequests() {
+  await initializeDatabase();
+
+  const { data, error } = await supabase.rpc('get_member_requests').returns<MemberRequestRow[]>();
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  return ((data ?? []) as MemberRequestRow[]).map(mapMemberRequestRow);
+}
+
+export async function createMemberRequest(input: CreateMemberRequestInput) {
+  await initializeDatabase();
+
+  const title = input.title.trim();
+  const body = input.body.trim();
+
+  if (!title || !body) {
+    throw new DatabaseError('INVALID_INPUT', '제목과 내용을 입력해주세요.');
+  }
+
+  if (title.length > 60 || body.length > 500) {
+    throw new DatabaseError('INVALID_INPUT', '제목은 60자, 내용은 500자 이내로 입력해주세요.');
+  }
+
+  const { error } = await supabase.rpc('create_member_request', {
+    p_title: title,
+    p_body: body
+  });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  return getMemberRequests();
+}
+
+export async function reviewMemberRequest(requestId: string, status: MemberRequestStatus, reply = '') {
+  await initializeDatabase();
+
+  const { error } = await supabase.rpc('review_member_request', {
+    p_request_id: requestId,
+    p_status: status,
+    p_admin_reply: reply.trim()
+  });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  return getMemberRequests();
+}
+
+export async function getStoreProducts() {
+  await initializeDatabase();
+
+  const { data, error } = await supabase.rpc('get_store_products').returns<StoreProductRow[]>();
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  return ((data ?? []) as StoreProductRow[]).map(mapStoreProductRow);
+}
+
+export async function createStoreProduct(input: CreateStoreProductInput) {
+  await initializeDatabase();
+
+  const name = input.name.trim();
+  const description = input.description.trim();
+
+  if (!name) {
+    throw new DatabaseError('INVALID_INPUT', '상품명을 입력해주세요.');
+  }
+
+  if (!Number.isInteger(input.price) || input.price < 0 || !Number.isInteger(input.stockQuantity) || input.stockQuantity < 0) {
+    throw new DatabaseError('INVALID_INPUT', '상품 가격과 재고를 확인해주세요.');
+  }
+
+  const imagePath = input.imageUri ? await uploadStoreProductImage(input.imageUri) : null;
+  const { error } = await supabase.rpc('create_store_product', {
+    p_name: name,
+    p_description: description,
+    p_image_path: imagePath,
+    p_price: input.price,
+    p_stock_quantity: input.stockQuantity
+  });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  return getStoreProducts();
+}
+
+export async function getStoreOrders() {
+  await initializeDatabase();
+
+  const { data, error } = await supabase.rpc('get_store_orders').returns<StoreOrderRow[]>();
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  return ((data ?? []) as StoreOrderRow[]).map(mapStoreOrderRow);
+}
+
+export async function createStoreOrder(productId: string, quantity: number) {
+  await initializeDatabase();
+
+  if (!productId || !Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+    throw new DatabaseError('INVALID_INPUT', '구매할 상품과 수량을 확인해주세요.');
+  }
+
+  const { error } = await supabase.rpc('create_store_order', {
+    p_product_id: productId,
+    p_quantity: quantity
+  });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  const [products, orders] = await Promise.all([getStoreProducts(), getStoreOrders()]);
+
+  return { products, orders };
+}
+
+export async function cancelStoreOrder(orderId: string) {
+  await initializeDatabase();
+
+  const { error } = await supabase.rpc('cancel_store_order', {
+    p_order_id: orderId
+  });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  const [products, orders] = await Promise.all([getStoreProducts(), getStoreOrders()]);
+
+  return { products, orders };
+}
+
+export async function reviewStoreOrder(orderId: string, approved: boolean, comment = '') {
+  await initializeDatabase();
+
+  const { error } = await supabase.rpc('review_store_order', {
+    p_order_id: orderId,
+    p_approved: approved,
+    p_admin_comment: comment.trim()
+  });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  const [products, orders] = await Promise.all([getStoreProducts(), getStoreOrders()]);
+
+  return { products, orders };
+}
+
 export async function getPassTransactions(memberId?: string) {
   await initializeDatabase();
 
@@ -1135,6 +1658,7 @@ export async function getNoticesFromDatabase() {
     body: row.body,
     author: row.author,
     createdAt: row.created_at,
+    imagePath: row.image_path ?? undefined,
     imageUri: row.image_path ? getNoticeImageUrl(row.image_path) : undefined
   }));
 }
@@ -1163,6 +1687,58 @@ export async function publishNotice(input: PublishNoticeInput) {
   return getNoticesFromDatabase();
 }
 
+export async function updateNotice(input: UpdateNoticeInput) {
+  await initializeDatabase();
+
+  const title = input.title.trim();
+  const body = input.body.trim();
+
+  if (!input.id || !title || !body) {
+    throw new DatabaseError('INVALID_INPUT', '공지 제목과 내용을 입력해주세요.');
+  }
+
+  const imagePath = input.replaceImage && input.imageUri ? await uploadNoticeImage(input.imageUri) : null;
+  const { data, error } = await supabase.rpc('update_notice', {
+    p_notice_id: input.id,
+    p_title: title,
+    p_body: body,
+    p_image_path: imagePath,
+    p_replace_image: input.replaceImage ?? false
+  });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  if (input.replaceImage && typeof data === 'string' && data.length > 0) {
+    await removeNoticeImage(data);
+  }
+
+  return getNoticesFromDatabase();
+}
+
+export async function deleteNotice(noticeId: string) {
+  await initializeDatabase();
+
+  if (!noticeId) {
+    throw new DatabaseError('INVALID_INPUT', '삭제할 공지를 찾지 못했습니다.');
+  }
+
+  const { data, error } = await supabase.rpc('delete_notice', {
+    p_notice_id: noticeId
+  });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  if (typeof data === 'string' && data.length > 0) {
+    await removeNoticeImage(data);
+  }
+
+  return getNoticesFromDatabase();
+}
+
 async function uploadNoticeImage(imageUri: string) {
   const response = await fetch(imageUri);
   const arrayBuffer = await response.arrayBuffer();
@@ -1181,6 +1757,14 @@ async function uploadNoticeImage(imageUri: string) {
   return filePath;
 }
 
+async function removeNoticeImage(imagePath: string) {
+  const { error } = await supabase.storage.from('notice-images').remove([imagePath]);
+
+  if (error) {
+    console.warn('공지 이미지 삭제 실패:', error.message);
+  }
+}
+
 async function uploadSpecialLessonImage(imageUri: string) {
   const response = await fetch(imageUri);
   const arrayBuffer = await response.arrayBuffer();
@@ -1188,6 +1772,24 @@ async function uploadSpecialLessonImage(imageUri: string) {
   const extension = getMediaExtension(contentType, 'image');
   const filePath = `${new Date().toISOString().slice(0, 10)}/${cryptoRandomId()}.${extension}`;
   const { error } = await supabase.storage.from('special-lesson-images').upload(filePath, arrayBuffer, {
+    contentType,
+    upsert: false
+  });
+
+  if (error) {
+    throw toDatabaseError(error.message);
+  }
+
+  return filePath;
+}
+
+async function uploadStoreProductImage(imageUri: string) {
+  const response = await fetch(imageUri);
+  const arrayBuffer = await response.arrayBuffer();
+  const contentType = response.headers.get('content-type') ?? 'image/jpeg';
+  const extension = getMediaExtension(contentType, 'image');
+  const filePath = `${new Date().toISOString().slice(0, 10)}/${cryptoRandomId()}.${extension}`;
+  const { error } = await supabase.storage.from('store-product-images').upload(filePath, arrayBuffer, {
     contentType,
     upsert: false
   });
@@ -1230,6 +1832,10 @@ function getNoticeImageUrl(imagePath: string) {
 
 function getSpecialLessonImageUrl(imagePath: string) {
   return supabase.storage.from('special-lesson-images').getPublicUrl(imagePath).data.publicUrl;
+}
+
+function getStoreProductImageUrl(imagePath: string) {
+  return supabase.storage.from('store-product-images').getPublicUrl(imagePath).data.publicUrl;
 }
 
 async function getLessonFeedbackMediaUrl(mediaPath: string | null) {
@@ -1330,6 +1936,21 @@ function mapLessonChangeRequestRow(row: LessonChangeRequestRow): LessonChangeReq
   };
 }
 
+function mapLessonAbsenceRequestRow(row: LessonAbsenceRequestRow): LessonAbsenceRequest {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    userName: row.user_name,
+    slotId: row.slot_id,
+    startsAt: row.starts_at,
+    instructor: row.instructor,
+    status: row.status,
+    createdAt: row.created_at,
+    reviewedAt: row.reviewed_at,
+    reviewedByName: row.reviewed_by_name
+  };
+}
+
 function mapLessonAssignmentRequestRow(row: LessonAssignmentRequestRow): LessonAssignmentRequest {
   return {
     id: row.id,
@@ -1342,7 +1963,8 @@ function mapLessonAssignmentRequestRow(row: LessonAssignmentRequestRow): LessonA
     status: row.status,
     createdAt: row.created_at,
     reviewedAt: row.reviewed_at,
-    reviewedByName: row.reviewed_by_name
+    reviewedByName: row.reviewed_by_name,
+    reviewComment: row.review_comment ?? ''
   };
 }
 
@@ -1415,6 +2037,53 @@ function mapSpecialLessonRegistrationRow(row: SpecialLessonRegistrationRow): Spe
     userName: row.user_name,
     status: row.status,
     queuePosition: row.queue_position,
+    createdAt: row.created_at,
+    reviewedAt: row.reviewed_at,
+    reviewedByName: row.reviewed_by_name
+  };
+}
+
+function mapMemberRequestRow(row: MemberRequestRow): MemberRequest {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    userName: row.user_name,
+    title: row.title,
+    body: row.body,
+    status: row.status,
+    adminReply: row.admin_reply ?? '',
+    createdAt: row.created_at,
+    reviewedAt: row.reviewed_at,
+    reviewedByName: row.reviewed_by_name
+  };
+}
+
+function mapStoreProductRow(row: StoreProductRow): StoreProduct {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    imagePath: row.image_path,
+    imageUri: row.image_path ? getStoreProductImageUrl(row.image_path) : undefined,
+    price: row.price,
+    stockQuantity: row.stock_quantity,
+    isActive: row.is_active,
+    createdAt: row.created_at
+  };
+}
+
+function mapStoreOrderRow(row: StoreOrderRow): StoreOrder {
+  return {
+    id: row.id,
+    productId: row.product_id,
+    productName: row.product_name,
+    userId: row.user_id,
+    userName: row.user_name,
+    quantity: row.quantity,
+    unitPrice: row.unit_price,
+    totalPrice: row.total_price,
+    status: row.status,
+    adminComment: row.admin_comment ?? '',
     createdAt: row.created_at,
     reviewedAt: row.reviewed_at,
     reviewedByName: row.reviewed_by_name

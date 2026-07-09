@@ -55,6 +55,75 @@ set capacity = least(greatest(capacity, 1), 3);
 alter table public.lesson_slots
   add constraint lesson_slots_capacity_range check (capacity between 1 and 3);
 
+create table if not exists public.instructor_lesson_times (
+  id uuid primary key default gen_random_uuid(),
+  instructor text not null,
+  weekday smallint not null check (weekday between 1 and 7),
+  slot_hour smallint not null check (slot_hour between 5 and 22),
+  slot_minute smallint not null default 0 check (slot_minute in (0, 30)),
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.instructor_lesson_times add column if not exists instructor text;
+update public.instructor_lesson_times
+set instructor = '강사'
+where instructor is null;
+alter table public.instructor_lesson_times alter column instructor set default '강사';
+alter table public.instructor_lesson_times alter column instructor set not null;
+
+alter table public.instructor_lesson_times add column if not exists weekday smallint;
+update public.instructor_lesson_times
+set weekday = 1
+where weekday is null;
+alter table public.instructor_lesson_times alter column weekday set default 1;
+alter table public.instructor_lesson_times alter column weekday set not null;
+alter table public.instructor_lesson_times drop constraint if exists instructor_lesson_times_weekday_range;
+alter table public.instructor_lesson_times
+  add constraint instructor_lesson_times_weekday_range check (weekday between 1 and 7);
+
+alter table public.instructor_lesson_times add column if not exists slot_hour smallint;
+update public.instructor_lesson_times
+set slot_hour = 5
+where slot_hour is null;
+alter table public.instructor_lesson_times alter column slot_hour set default 5;
+alter table public.instructor_lesson_times alter column slot_hour set not null;
+alter table public.instructor_lesson_times drop constraint if exists instructor_lesson_times_slot_hour_range;
+alter table public.instructor_lesson_times
+  add constraint instructor_lesson_times_slot_hour_range check (slot_hour between 5 and 22);
+
+alter table public.instructor_lesson_times add column if not exists slot_minute smallint;
+update public.instructor_lesson_times
+set slot_minute = 0
+where slot_minute is null;
+alter table public.instructor_lesson_times alter column slot_minute set default 0;
+alter table public.instructor_lesson_times alter column slot_minute set not null;
+alter table public.instructor_lesson_times drop constraint if exists instructor_lesson_times_slot_minute_range;
+alter table public.instructor_lesson_times
+  add constraint instructor_lesson_times_slot_minute_range check (slot_minute in (0, 30));
+
+alter table public.instructor_lesson_times add column if not exists is_active boolean;
+update public.instructor_lesson_times
+set is_active = true
+where is_active is null;
+alter table public.instructor_lesson_times alter column is_active set default true;
+alter table public.instructor_lesson_times alter column is_active set not null;
+
+alter table public.instructor_lesson_times add column if not exists created_at timestamptz;
+update public.instructor_lesson_times
+set created_at = now()
+where created_at is null;
+alter table public.instructor_lesson_times alter column created_at set default now();
+alter table public.instructor_lesson_times alter column created_at set not null;
+
+alter table public.instructor_lesson_times add column if not exists updated_at timestamptz;
+update public.instructor_lesson_times
+set updated_at = now()
+where updated_at is null;
+alter table public.instructor_lesson_times alter column updated_at set default now();
+alter table public.instructor_lesson_times alter column updated_at set not null;
+
 create table if not exists public.fixed_lessons (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.profiles(id) on delete cascade,
@@ -62,11 +131,22 @@ create table if not exists public.fixed_lessons (
   slot_hour smallint not null check (slot_hour between 0 and 23),
   slot_minute smallint not null default 0 check (slot_minute in (0, 30)),
   instructor text not null,
+  duration_minutes integer not null default 60,
   lesson_capacity integer not null default 1,
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.fixed_lessons add column if not exists slot_hour smallint;
+update public.fixed_lessons
+set slot_hour = 5
+where slot_hour is null;
+alter table public.fixed_lessons alter column slot_hour set default 5;
+alter table public.fixed_lessons alter column slot_hour set not null;
+alter table public.fixed_lessons drop constraint if exists fixed_lessons_slot_hour_range;
+alter table public.fixed_lessons
+  add constraint fixed_lessons_slot_hour_range check (slot_hour between 0 and 23);
 
 alter table public.fixed_lessons add column if not exists slot_minute smallint;
 update public.fixed_lessons
@@ -77,6 +157,16 @@ alter table public.fixed_lessons alter column slot_minute set not null;
 alter table public.fixed_lessons drop constraint if exists fixed_lessons_slot_minute_range;
 alter table public.fixed_lessons
   add constraint fixed_lessons_slot_minute_range check (slot_minute in (0, 30));
+
+alter table public.fixed_lessons add column if not exists duration_minutes integer;
+update public.fixed_lessons
+set duration_minutes = 60
+where duration_minutes is null;
+alter table public.fixed_lessons alter column duration_minutes set default 60;
+alter table public.fixed_lessons alter column duration_minutes set not null;
+alter table public.fixed_lessons drop constraint if exists fixed_lessons_duration_minutes_range;
+alter table public.fixed_lessons
+  add constraint fixed_lessons_duration_minutes_range check (duration_minutes in (30, 60));
 
 alter table public.fixed_lessons add column if not exists lesson_capacity integer;
 update public.fixed_lessons
@@ -129,6 +219,18 @@ create table if not exists public.lesson_absences (
   canceled_at timestamptz
 );
 
+create table if not exists public.lesson_absence_requests (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  fixed_lesson_id uuid not null references public.fixed_lessons(id) on delete cascade,
+  slot_id uuid not null references public.lesson_slots(id) on delete cascade,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected', 'canceled')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  reviewed_by uuid references public.profiles(id) on delete set null,
+  reviewed_at timestamptz
+);
+
 do $$
 begin
   if exists (
@@ -148,9 +250,51 @@ create table if not exists public.reservations (
   slot_id uuid not null references public.lesson_slots(id) on delete cascade,
   user_id uuid not null references public.profiles(id) on delete cascade,
   status public.reservation_status not null,
+  duration_minutes integer not null default 60,
   created_at timestamptz not null default now(),
   canceled_at timestamptz
 );
+
+alter table public.reservations add column if not exists duration_minutes integer;
+update public.reservations
+set duration_minutes = 60
+where duration_minutes is null;
+alter table public.reservations alter column duration_minutes set default 60;
+alter table public.reservations alter column duration_minutes set not null;
+alter table public.reservations drop constraint if exists reservations_duration_minutes_range;
+alter table public.reservations
+  add constraint reservations_duration_minutes_range check (duration_minutes in (30, 60));
+
+update public.lesson_slots s
+set
+  is_active = false,
+  updated_at = now()
+where s.starts_at >= now()
+  and (
+    extract(hour from s.starts_at at time zone 'Asia/Seoul')::integer < 5
+    or extract(hour from s.starts_at at time zone 'Asia/Seoul')::integer > 22
+  )
+  and not exists (
+    select 1
+    from public.reservations r
+    where r.slot_id = s.id
+      and r.status = 'reserved'
+      and r.canceled_at is null
+  )
+  and not exists (
+    select 1
+    from public.lesson_absences la
+    where la.slot_id = s.id
+      and la.canceled_at is null
+  )
+  and not exists (
+    select 1
+    from public.fixed_lessons fl
+    where fl.is_active = true
+      and fl.weekday = extract(isodow from s.starts_at at time zone 'Asia/Seoul')::integer
+      and fl.slot_hour = extract(hour from s.starts_at at time zone 'Asia/Seoul')::integer
+      and fl.slot_minute = extract(minute from s.starts_at at time zone 'Asia/Seoul')::integer
+  );
 
 create table if not exists public.lesson_change_requests (
   id uuid primary key default gen_random_uuid(),
@@ -170,6 +314,7 @@ create table if not exists public.lesson_assignment_requests (
   slot_id uuid not null references public.lesson_slots(id) on delete cascade,
   request_type text not null check (request_type in ('extra_lesson', 'free_swim')),
   status text not null default 'pending' check (status in ('pending', 'approved', 'rejected', 'canceled')),
+  review_comment text not null default '',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   reviewed_by uuid references public.profiles(id) on delete set null,
@@ -219,6 +364,11 @@ alter table public.special_lessons
   add constraint special_lessons_description_length check (char_length(description) <= 300);
 
 alter table public.special_lessons add column if not exists image_path text;
+alter table public.lesson_assignment_requests add column if not exists review_comment text not null default '';
+alter table public.lesson_assignment_requests drop constraint if exists lesson_assignment_requests_review_comment_length;
+alter table public.lesson_assignment_requests
+  add constraint lesson_assignment_requests_review_comment_length check (char_length(review_comment) <= 120);
+
 alter table public.special_lessons add column if not exists instructor text;
 update public.special_lessons
 set instructor = ''
@@ -262,6 +412,50 @@ create table if not exists public.special_lesson_registrations (
   reviewed_at timestamptz
 );
 
+create table if not exists public.member_requests (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  title text not null check (char_length(btrim(title)) between 1 and 60),
+  body text not null check (char_length(btrim(body)) between 1 and 500),
+  status text not null default 'pending' check (status in ('pending', 'reviewing', 'resolved', 'rejected')),
+  admin_reply text not null default '' check (char_length(admin_reply) <= 200),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  reviewed_by uuid references public.profiles(id) on delete set null,
+  reviewed_at timestamptz
+);
+
+create table if not exists public.store_products (
+  id uuid primary key default gen_random_uuid(),
+  name text not null check (char_length(btrim(name)) between 1 and 60),
+  description text not null default '' check (char_length(description) <= 300),
+  image_path text,
+  price integer not null check (price >= 0),
+  stock_quantity integer not null default 0 check (stock_quantity >= 0),
+  is_active boolean not null default true,
+  created_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.store_products
+  add column if not exists image_path text;
+
+create table if not exists public.store_orders (
+  id uuid primary key default gen_random_uuid(),
+  product_id uuid not null references public.store_products(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  quantity integer not null check (quantity between 1 and 99),
+  unit_price integer not null check (unit_price >= 0),
+  total_price integer not null check (total_price >= 0),
+  status text not null default 'pending' check (status in ('pending', 'confirmed', 'canceled')),
+  admin_comment text not null default '' check (char_length(admin_comment) <= 200),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  reviewed_by uuid references public.profiles(id) on delete set null,
+  reviewed_at timestamptz
+);
+
 create table if not exists public.pass_transactions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.profiles(id) on delete cascade,
@@ -282,6 +476,9 @@ create table if not exists public.notices (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.notices
+  add column if not exists updated_at timestamptz not null default now();
 
 alter table public.notices alter column created_by drop not null;
 
@@ -311,6 +508,10 @@ values ('special-lesson-images', 'special-lesson-images', true)
 on conflict (id) do update set public = excluded.public;
 
 insert into storage.buckets (id, name, public)
+values ('store-product-images', 'store-product-images', true)
+on conflict (id) do update set public = excluded.public;
+
+insert into storage.buckets (id, name, public)
 values ('lesson-feedback', 'lesson-feedback', false)
 on conflict (id) do update set public = excluded.public;
 
@@ -329,6 +530,41 @@ create unique index if not exists member_passes_one_active_pass
 create unique index if not exists fixed_lessons_one_active_member_slot
   on public.fixed_lessons(user_id, weekday, slot_hour, slot_minute)
   where is_active = true;
+
+create unique index if not exists instructor_lesson_times_one_active_time
+  on public.instructor_lesson_times(weekday, slot_hour, slot_minute)
+  where is_active = true;
+
+create index if not exists instructor_lesson_times_instructor_active
+  on public.instructor_lesson_times(instructor, weekday, slot_hour, slot_minute)
+  where is_active = true;
+
+with default_instructor_times as (
+  select
+    weekdays.weekday,
+    hours.slot_hour,
+    0 as slot_minute,
+    case
+      when weekdays.weekday in (6, 7) then
+        case when hours.slot_hour <= 13 then '신준혁' else '이혜원' end
+      when hours.slot_hour <= 8 then '김성대'
+      when hours.slot_hour <= 16 then '이민기'
+      when hours.slot_hour <= 18 then '대표님'
+      else '한승빈'
+    end as instructor
+  from generate_series(1, 7) as weekdays(weekday)
+  cross join generate_series(5, 22) as hours(slot_hour)
+)
+insert into public.instructor_lesson_times (instructor, weekday, slot_hour, slot_minute)
+select instructor, weekday, slot_hour, slot_minute
+from default_instructor_times dit
+where not exists (
+  select 1
+  from public.instructor_lesson_times ilt
+  where ilt.weekday = dit.weekday
+    and ilt.slot_hour = dit.slot_hour
+    and ilt.slot_minute = dit.slot_minute
+);
 
 drop index if exists fixed_lessons_one_active_slot;
 drop index if exists fixed_lessons_weekday_hour;
@@ -350,6 +586,16 @@ create index if not exists fixed_lessons_weekday_hour
 create index if not exists lesson_absences_slot_active
   on public.lesson_absences(slot_id)
   where canceled_at is null;
+
+create unique index if not exists lesson_absence_requests_one_pending_slot
+  on public.lesson_absence_requests(user_id, slot_id)
+  where status = 'pending';
+
+create index if not exists lesson_absence_requests_status_created_at
+  on public.lesson_absence_requests(status, created_at desc);
+
+create index if not exists lesson_absence_requests_user_created_at
+  on public.lesson_absence_requests(user_id, created_at desc);
 
 create index if not exists reservations_member_status
   on public.reservations(user_id, status);
@@ -399,6 +645,21 @@ create index if not exists special_lesson_registrations_lesson_created_at
 create index if not exists special_lesson_registrations_user_created_at
   on public.special_lesson_registrations(user_id, created_at desc);
 
+create index if not exists member_requests_status_created_at
+  on public.member_requests(status, created_at desc);
+
+create index if not exists member_requests_user_created_at
+  on public.member_requests(user_id, created_at desc);
+
+create index if not exists store_products_active_created_at
+  on public.store_products(is_active, created_at desc);
+
+create index if not exists store_orders_status_created_at
+  on public.store_orders(status, created_at desc);
+
+create index if not exists store_orders_user_created_at
+  on public.store_orders(user_id, created_at desc);
+
 create index if not exists pass_transactions_user_created_at
   on public.pass_transactions(user_id, created_at desc);
 
@@ -420,6 +681,11 @@ for each row execute function public.set_updated_at();
 drop trigger if exists lesson_slots_set_updated_at on public.lesson_slots;
 create trigger lesson_slots_set_updated_at
 before update on public.lesson_slots
+for each row execute function public.set_updated_at();
+
+drop trigger if exists instructor_lesson_times_set_updated_at on public.instructor_lesson_times;
+create trigger instructor_lesson_times_set_updated_at
+before update on public.instructor_lesson_times
 for each row execute function public.set_updated_at();
 
 drop trigger if exists fixed_lessons_set_updated_at on public.fixed_lessons;
@@ -447,6 +713,11 @@ create trigger lesson_assignment_requests_set_updated_at
 before update on public.lesson_assignment_requests
 for each row execute function public.set_updated_at();
 
+drop trigger if exists lesson_absence_requests_set_updated_at on public.lesson_absence_requests;
+create trigger lesson_absence_requests_set_updated_at
+before update on public.lesson_absence_requests
+for each row execute function public.set_updated_at();
+
 drop trigger if exists lesson_feedbacks_set_updated_at on public.lesson_feedbacks;
 create trigger lesson_feedbacks_set_updated_at
 before update on public.lesson_feedbacks
@@ -460,6 +731,21 @@ for each row execute function public.set_updated_at();
 drop trigger if exists special_lesson_registrations_set_updated_at on public.special_lesson_registrations;
 create trigger special_lesson_registrations_set_updated_at
 before update on public.special_lesson_registrations
+for each row execute function public.set_updated_at();
+
+drop trigger if exists member_requests_set_updated_at on public.member_requests;
+create trigger member_requests_set_updated_at
+before update on public.member_requests
+for each row execute function public.set_updated_at();
+
+drop trigger if exists store_products_set_updated_at on public.store_products;
+create trigger store_products_set_updated_at
+before update on public.store_products
+for each row execute function public.set_updated_at();
+
+drop trigger if exists store_orders_set_updated_at on public.store_orders;
+create trigger store_orders_set_updated_at
+before update on public.store_orders
 for each row execute function public.set_updated_at();
 
 create or replace function public.current_user_role()
@@ -558,6 +844,87 @@ begin
 end;
 $$;
 
+create or replace function public.assert_lesson_absence_request_deadline(
+  p_starts_at timestamptz,
+  p_requested_at timestamptz default now()
+)
+returns void
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_starts_at is null then
+    raise exception '취소할 수업 시간을 확인해주세요.';
+  end if;
+
+  if (coalesce(p_requested_at, now()) at time zone 'Asia/Seoul')::date >= (p_starts_at at time zone 'Asia/Seoul')::date then
+    raise exception '수업 취소는 수업 전날까지만 가능합니다.';
+  end if;
+end;
+$$;
+
+create or replace function public.assert_member_absence_request_limit(
+  p_user_id uuid,
+  p_exclude_request_id uuid default null
+)
+returns void
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  active_pass public.member_passes%rowtype;
+  allowed_count integer;
+  used_count integer;
+  pending_count integer;
+begin
+  if p_user_id is null then
+    raise exception '회원을 확인해주세요.';
+  end if;
+
+  select *
+  into active_pass
+  from public.member_passes mp
+  where mp.user_id = p_user_id
+    and mp.is_active = true
+  order by mp.purchased_at desc, mp.created_at desc
+  limit 1;
+
+  if not found then
+    raise exception '회원권 정보를 확인할 수 없습니다.';
+  end if;
+
+  allowed_count := floor(active_pass.total_count::numeric / 8)::integer * 2;
+
+  select count(*)::integer
+  into used_count
+  from public.lesson_absence_requests lar
+  join public.lesson_absences la
+    on la.user_id = lar.user_id
+    and la.fixed_lesson_id = lar.fixed_lesson_id
+    and la.slot_id = lar.slot_id
+    and la.canceled_at is null
+  where lar.user_id = p_user_id
+    and lar.status = 'approved'
+    and lar.created_at >= active_pass.created_at;
+
+  select count(*)::integer
+  into pending_count
+  from public.lesson_absence_requests lar
+  where lar.user_id = p_user_id
+    and lar.status = 'pending'
+    and lar.created_at >= active_pass.created_at
+    and (p_exclude_request_id is null or lar.id <> p_exclude_request_id);
+
+  if used_count + pending_count >= allowed_count then
+    raise exception '회원권 8회당 수업 취소는 2회까지만 가능합니다.';
+  end if;
+end;
+$$;
+
 create or replace function public.sync_member_pass_balance(
   p_user_id uuid,
   p_balance integer
@@ -585,17 +952,39 @@ $$;
 
 create or replace function public.instructor_for_slot(p_starts_at timestamptz)
 returns text
-language sql
-immutable
+language plpgsql
+stable
+security definer
+set search_path = public
 as $$
-  select case
-    when extract(isodow from p_starts_at at time zone 'Asia/Seoul') in (6, 7) then
-      case when extract(hour from p_starts_at at time zone 'Asia/Seoul') <= 13 then '신준혁' else '이혜원' end
-    when extract(hour from p_starts_at at time zone 'Asia/Seoul') <= 8 then '김성대'
-    when extract(hour from p_starts_at at time zone 'Asia/Seoul') <= 16 then '이민기'
-    when extract(hour from p_starts_at at time zone 'Asia/Seoul') <= 18 then '대표님'
+declare
+  slot_weekday integer := extract(isodow from p_starts_at at time zone 'Asia/Seoul')::integer;
+  target_slot_hour integer := extract(hour from p_starts_at at time zone 'Asia/Seoul')::integer;
+  target_slot_minute integer := extract(minute from p_starts_at at time zone 'Asia/Seoul')::integer;
+  assigned_instructor text;
+begin
+  select ilt.instructor
+  into assigned_instructor
+  from public.instructor_lesson_times ilt
+  where ilt.weekday = slot_weekday
+    and ilt.slot_hour = target_slot_hour
+    and ilt.slot_minute = target_slot_minute
+    and ilt.is_active = true
+  limit 1;
+
+  if assigned_instructor is not null then
+    return assigned_instructor;
+  end if;
+
+  return case
+    when slot_weekday in (6, 7) then
+      case when target_slot_hour <= 13 then '신준혁' else '이혜원' end
+    when target_slot_hour <= 8 then '김성대'
+    when target_slot_hour <= 16 then '이민기'
+    when target_slot_hour <= 18 then '대표님'
     else '한승빈'
   end;
+end;
 $$;
 
 create or replace function public.default_instructor_for_fixed_lesson(
@@ -645,9 +1034,189 @@ begin
 end;
 $$;
 
+drop function if exists public.get_instructor_lesson_times();
+
+create or replace function public.get_instructor_lesson_times()
+returns table (
+  id uuid,
+  instructor text,
+  weekday integer,
+  slot_hour integer,
+  slot_minute integer,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception '로그인이 필요합니다.';
+  end if;
+
+  return query
+    select
+      ilt.id,
+      ilt.instructor,
+      ilt.weekday::integer,
+      ilt.slot_hour::integer,
+      ilt.slot_minute::integer,
+      ilt.created_at,
+      ilt.updated_at
+    from public.instructor_lesson_times ilt
+    where ilt.is_active = true
+    order by ilt.instructor asc, ilt.weekday asc, ilt.slot_hour asc, ilt.slot_minute asc;
+end;
+$$;
+
+drop function if exists public.upsert_instructor_lesson_time(uuid, text, integer, integer, integer);
+
+create or replace function public.upsert_instructor_lesson_time(
+  p_time_id uuid,
+  p_instructor text,
+  p_weekday integer,
+  p_slot_hour integer,
+  p_slot_minute integer
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  time_id uuid;
+  normalized_instructor text := btrim(coalesce(p_instructor, ''));
+begin
+  if coalesce(public.current_user_role()::text, '') <> 'admin' then
+    raise exception '관리자 권한이 필요합니다.';
+  end if;
+
+  if normalized_instructor = '' or char_length(normalized_instructor) > 40 then
+    raise exception '강사명은 1자에서 40자 사이로 입력해주세요.';
+  end if;
+
+  if p_weekday < 1 or p_weekday > 7 or p_slot_hour < 5 or p_slot_hour > 22 or p_slot_minute not in (0, 30) then
+    raise exception '강사 배정 시간은 05:00부터 22:00 사이여야 합니다.';
+  end if;
+
+  if p_time_id is null then
+    insert into public.instructor_lesson_times (instructor, weekday, slot_hour, slot_minute)
+    values (normalized_instructor, p_weekday, p_slot_hour, p_slot_minute)
+    on conflict (weekday, slot_hour, slot_minute) where is_active = true
+    do update set
+      instructor = excluded.instructor,
+      updated_at = now()
+    returning id into time_id;
+  else
+    update public.instructor_lesson_times ilt
+    set
+      is_active = false,
+      updated_at = now()
+    where ilt.id <> p_time_id
+      and ilt.weekday = p_weekday
+      and ilt.slot_hour = p_slot_hour
+      and ilt.slot_minute = p_slot_minute
+      and ilt.is_active = true;
+
+    update public.instructor_lesson_times
+    set
+      instructor = normalized_instructor,
+      weekday = p_weekday,
+      slot_hour = p_slot_hour,
+      slot_minute = p_slot_minute,
+      is_active = true,
+      updated_at = now()
+    where id = p_time_id
+    returning id into time_id;
+
+    if time_id is null then
+      raise exception '수정할 강사 배정 시간을 찾을 수 없습니다.';
+    end if;
+  end if;
+
+  update public.lesson_slots
+  set
+    instructor = normalized_instructor,
+    updated_at = now()
+  where starts_at >= now()
+    and extract(isodow from starts_at at time zone 'Asia/Seoul')::integer = p_weekday
+    and extract(hour from starts_at at time zone 'Asia/Seoul')::integer = p_slot_hour
+    and extract(minute from starts_at at time zone 'Asia/Seoul')::integer = p_slot_minute;
+
+  update public.fixed_lessons fl
+  set
+    instructor = normalized_instructor,
+    updated_at = now()
+  where fl.is_active = true
+    and fl.weekday = p_weekday
+    and fl.slot_hour = p_slot_hour
+    and fl.slot_minute = p_slot_minute;
+
+  return time_id;
+end;
+$$;
+
+drop function if exists public.cancel_instructor_lesson_time(uuid);
+
+create or replace function public.cancel_instructor_lesson_time(p_time_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_lesson_time public.instructor_lesson_times%rowtype;
+begin
+  if coalesce(public.current_user_role()::text, '') <> 'admin' then
+    raise exception '관리자 권한이 필요합니다.';
+  end if;
+
+  if p_time_id is null then
+    raise exception '삭제할 강사 배정 시간을 확인해주세요.';
+  end if;
+
+  select *
+  into current_lesson_time
+  from public.instructor_lesson_times
+  where id = p_time_id
+    and is_active = true
+  for update;
+
+  if not found then
+    raise exception '삭제할 강사 배정 시간을 찾을 수 없습니다.';
+  end if;
+
+  update public.instructor_lesson_times
+  set
+    is_active = false,
+    updated_at = now()
+  where id = p_time_id;
+
+  update public.lesson_slots
+  set
+    instructor = public.instructor_for_slot(starts_at),
+    updated_at = now()
+  where starts_at >= now()
+    and extract(isodow from starts_at at time zone 'Asia/Seoul')::integer = current_lesson_time.weekday
+    and extract(hour from starts_at at time zone 'Asia/Seoul')::integer = current_lesson_time.slot_hour
+    and extract(minute from starts_at at time zone 'Asia/Seoul')::integer = current_lesson_time.slot_minute;
+
+  update public.fixed_lessons fl
+  set
+    instructor = public.default_instructor_for_fixed_lesson(current_lesson_time.weekday, current_lesson_time.slot_hour, current_lesson_time.slot_minute),
+    updated_at = now()
+  where fl.is_active = true
+    and fl.weekday = current_lesson_time.weekday
+    and fl.slot_hour = current_lesson_time.slot_hour
+    and fl.slot_minute = current_lesson_time.slot_minute;
+end;
+$$;
+
 create or replace function public.sync_lesson_slots(
   p_start_date date default (now() at time zone 'Asia/Seoul')::date,
-  p_days integer default 28
+  p_days integer default 30
 )
 returns integer
 language plpgsql
@@ -668,34 +1237,43 @@ begin
     select
       slot_date,
       unnest(
-        case
-          when extract(isodow from slot_date) in (6, 7) then array[9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
-          else array[6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
-        end
+        array[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
       ) as slot_hour,
-      0 as slot_minute
+      0 as slot_minute,
+      true as should_open
     from target_days
   ),
   fixed_times as (
     select distinct
       td.slot_date,
       fl.slot_hour::integer as slot_hour,
-      fl.slot_minute::integer as slot_minute
+      fl.slot_minute::integer as slot_minute,
+      true as should_open
     from target_days td
     join public.fixed_lessons fl
       on fl.weekday = extract(isodow from td.slot_date)::integer
       and fl.is_active = true
+      and fl.slot_hour between 5 and 22
   ),
   target_times as (
-    select slot_date, slot_hour, slot_minute from default_times
-    union
-    select slot_date, slot_hour, slot_minute from fixed_times
+    select
+      slot_date,
+      slot_hour,
+      slot_minute,
+      bool_or(should_open) as should_open
+    from (
+      select slot_date, slot_hour, slot_minute, should_open from default_times
+      union all
+      select slot_date, slot_hour, slot_minute, should_open from fixed_times
+    ) times
+    group by slot_date, slot_hour, slot_minute
   ),
   built_slots as (
     select
       slot_date,
       slot_hour,
       slot_minute,
+      should_open,
       make_timestamptz(
         extract(year from slot_date)::integer,
         extract(month from slot_date)::integer,
@@ -708,12 +1286,13 @@ begin
     from target_times
   ),
   inserted as (
-    insert into public.lesson_slots (starts_at, instructor, capacity, duration_minutes)
+    insert into public.lesson_slots (starts_at, instructor, capacity, duration_minutes, is_active)
     select
       bs.starts_at,
       public.instructor_for_slot(bs.starts_at),
       1,
-      60
+      60,
+      bs.should_open
     from built_slots bs
     on conflict (starts_at) do nothing
     returning 1
@@ -772,14 +1351,19 @@ for each row execute function public.handle_new_user();
 alter table public.profiles enable row level security;
 alter table public.member_passes enable row level security;
 alter table public.lesson_slots enable row level security;
+alter table public.instructor_lesson_times enable row level security;
 alter table public.fixed_lessons enable row level security;
 alter table public.lesson_absences enable row level security;
+alter table public.lesson_absence_requests enable row level security;
 alter table public.reservations enable row level security;
 alter table public.lesson_change_requests enable row level security;
 alter table public.lesson_assignment_requests enable row level security;
 alter table public.lesson_feedbacks enable row level security;
 alter table public.special_lessons enable row level security;
 alter table public.special_lesson_registrations enable row level security;
+alter table public.member_requests enable row level security;
+alter table public.store_products enable row level security;
+alter table public.store_orders enable row level security;
 alter table public.pass_transactions enable row level security;
 alter table public.notices enable row level security;
 
@@ -841,6 +1425,19 @@ to authenticated
 using (public.current_user_role() = 'admin')
 with check (public.current_user_role() = 'admin');
 
+drop policy if exists "Authenticated users can read instructor lesson times" on public.instructor_lesson_times;
+create policy "Authenticated users can read instructor lesson times"
+on public.instructor_lesson_times for select
+to authenticated
+using (is_active = true);
+
+drop policy if exists "Admins can manage instructor lesson times" on public.instructor_lesson_times;
+create policy "Admins can manage instructor lesson times"
+on public.instructor_lesson_times for all
+to authenticated
+using (public.current_user_role() = 'admin')
+with check (public.current_user_role() = 'admin');
+
 drop policy if exists "Users can read own fixed lessons" on public.fixed_lessons;
 create policy "Users can read own fixed lessons"
 on public.fixed_lessons for select
@@ -869,6 +1466,18 @@ using (user_id = auth.uid());
 drop policy if exists "Admins can read lesson absences" on public.lesson_absences;
 create policy "Admins can read lesson absences"
 on public.lesson_absences for select
+to authenticated
+using (public.current_user_role() = 'admin');
+
+drop policy if exists "Users can read own lesson absence requests" on public.lesson_absence_requests;
+create policy "Users can read own lesson absence requests"
+on public.lesson_absence_requests for select
+to authenticated
+using (user_id = auth.uid());
+
+drop policy if exists "Admins can read lesson absence requests" on public.lesson_absence_requests;
+create policy "Admins can read lesson absence requests"
+on public.lesson_absence_requests for select
 to authenticated
 using (public.current_user_role() = 'admin');
 
@@ -942,6 +1551,42 @@ using (user_id = auth.uid());
 drop policy if exists "Admins can read special lesson registrations" on public.special_lesson_registrations;
 create policy "Admins can read special lesson registrations"
 on public.special_lesson_registrations for select
+to authenticated
+using (public.current_user_role() = 'admin');
+
+drop policy if exists "Users can read own member requests" on public.member_requests;
+create policy "Users can read own member requests"
+on public.member_requests for select
+to authenticated
+using (user_id = auth.uid());
+
+drop policy if exists "Admins can read member requests" on public.member_requests;
+create policy "Admins can read member requests"
+on public.member_requests for select
+to authenticated
+using (public.current_user_role() = 'admin');
+
+drop policy if exists "Authenticated users can read active store products" on public.store_products;
+create policy "Authenticated users can read active store products"
+on public.store_products for select
+to authenticated
+using (is_active = true);
+
+drop policy if exists "Admins can read store products" on public.store_products;
+create policy "Admins can read store products"
+on public.store_products for select
+to authenticated
+using (public.current_user_role() = 'admin');
+
+drop policy if exists "Users can read own store orders" on public.store_orders;
+create policy "Users can read own store orders"
+on public.store_orders for select
+to authenticated
+using (user_id = auth.uid());
+
+drop policy if exists "Admins can read store orders" on public.store_orders;
+create policy "Admins can read store orders"
+on public.store_orders for select
 to authenticated
 using (public.current_user_role() = 'admin');
 
@@ -1032,6 +1677,31 @@ on storage.objects for delete
 to authenticated
 using (bucket_id = 'special-lesson-images' and public.current_user_role() = 'admin');
 
+drop policy if exists "Authenticated users can read store product images" on storage.objects;
+create policy "Authenticated users can read store product images"
+on storage.objects for select
+to authenticated
+using (bucket_id = 'store-product-images');
+
+drop policy if exists "Admins can upload store product images" on storage.objects;
+create policy "Admins can upload store product images"
+on storage.objects for insert
+to authenticated
+with check (bucket_id = 'store-product-images' and public.current_user_role() = 'admin');
+
+drop policy if exists "Admins can update store product images" on storage.objects;
+create policy "Admins can update store product images"
+on storage.objects for update
+to authenticated
+using (bucket_id = 'store-product-images' and public.current_user_role() = 'admin')
+with check (bucket_id = 'store-product-images' and public.current_user_role() = 'admin');
+
+drop policy if exists "Admins can delete store product images" on storage.objects;
+create policy "Admins can delete store product images"
+on storage.objects for delete
+to authenticated
+using (bucket_id = 'store-product-images' and public.current_user_role() = 'admin');
+
 drop policy if exists "Users can read own lesson feedback media" on storage.objects;
 create policy "Users can read own lesson feedback media"
 on storage.objects for select
@@ -1067,7 +1737,7 @@ drop function if exists public.get_lesson_slots_snapshot(date, integer);
 
 create or replace function public.get_lesson_slots_snapshot(
   p_start_date date default (now() at time zone 'Asia/Seoul')::date,
-  p_days integer default 28
+  p_days integer default 30
 )
 returns table (
   slot_id uuid,
@@ -1078,6 +1748,7 @@ returns table (
   is_active boolean,
   fixed_lesson_id uuid,
   fixed_lesson_capacity integer,
+  fixed_lesson_duration_minutes integer,
   fixed_user_id uuid,
   fixed_user_name text,
   absence_user_id uuid,
@@ -1085,6 +1756,7 @@ returns table (
   absence_created_at timestamptz,
   substitute_user_id uuid,
   substitute_user_name text,
+  substitute_duration_minutes integer,
   substitute_created_at timestamptz
 )
 language plpgsql
@@ -1136,6 +1808,7 @@ begin
         bs.is_active,
         fl.id as fixed_lesson_id,
         public.active_member_lesson_capacity(fl.user_id)::integer as fixed_lesson_capacity,
+        fl.duration_minutes::integer as fixed_lesson_duration_minutes,
         case
           when is_admin or fl.user_id = auth.uid() then fl.user_id
           else null
@@ -1157,6 +1830,7 @@ begin
         la.created_at as absence_created_at,
         null::uuid as substitute_user_id,
         null::text as substitute_user_name,
+        null::integer as substitute_duration_minutes,
         null::timestamptz as substitute_created_at
       from base_slots bs
       join public.fixed_lessons fl
@@ -1182,6 +1856,7 @@ begin
         bs.is_active,
         null::uuid as fixed_lesson_id,
         null::integer as fixed_lesson_capacity,
+        null::integer as fixed_lesson_duration_minutes,
         null::uuid as fixed_user_id,
         null::text as fixed_user_name,
         null::uuid as absence_user_id,
@@ -1195,6 +1870,7 @@ begin
           when is_admin or r.user_id = auth.uid() then rp.name
           else '대체 예약 완료'
         end as substitute_user_name,
+        r.duration_minutes::integer as substitute_duration_minutes,
         r.created_at as substitute_created_at
       from base_slots bs
       join public.reservations r
@@ -1214,6 +1890,7 @@ begin
         bs.is_active,
         null::uuid as fixed_lesson_id,
         null::integer as fixed_lesson_capacity,
+        null::integer as fixed_lesson_duration_minutes,
         null::uuid as fixed_user_id,
         null::text as fixed_user_name,
         null::uuid as absence_user_id,
@@ -1221,6 +1898,7 @@ begin
         null::timestamptz as absence_created_at,
         null::uuid as substitute_user_id,
         null::text as substitute_user_name,
+        null::integer as substitute_duration_minutes,
         null::timestamptz as substitute_created_at
       from base_slots bs
       join fixed_group_capacity fgc on fgc.slot_id = bs.id
@@ -1330,6 +2008,7 @@ returns table (
   slot_hour integer,
   slot_minute integer,
   instructor text,
+  duration_minutes integer,
   lesson_capacity integer
 )
 language sql
@@ -1343,6 +2022,7 @@ as $$
     fl.slot_hour::integer,
     fl.slot_minute::integer,
     fl.instructor,
+    fl.duration_minutes::integer,
     public.active_member_lesson_capacity(fl.user_id)::integer
   from public.fixed_lessons fl
   where fl.user_id = auth.uid()
@@ -1355,6 +2035,7 @@ drop function if exists public.upsert_fixed_lesson(uuid, integer, integer, text)
 drop function if exists public.upsert_fixed_lesson(uuid, integer, integer, text, integer);
 drop function if exists public.upsert_fixed_lesson(uuid, integer, integer, integer, text);
 drop function if exists public.upsert_fixed_lesson(uuid, integer, integer, integer, text, integer);
+drop function if exists public.upsert_fixed_lesson(uuid, integer, integer, integer, integer, text);
 drop table if exists public.lesson_slot_settings;
 
 create or replace function public.upsert_fixed_lesson(
@@ -1362,7 +2043,8 @@ create or replace function public.upsert_fixed_lesson(
   p_weekday integer,
   p_slot_hour integer,
   p_slot_minute integer,
-  p_instructor text
+  p_instructor text default '',
+  p_duration_minutes integer default 60
 )
 returns uuid
 language plpgsql
@@ -1381,8 +2063,12 @@ begin
     raise exception '관리자 권한이 필요합니다.';
   end if;
 
-  if p_weekday < 1 or p_weekday > 7 or p_slot_hour < 0 or p_slot_hour > 23 or p_slot_minute not in (0, 30) then
-    raise exception '고정 수업 요일과 시간을 확인해주세요.';
+  if p_weekday < 1 or p_weekday > 7 or p_slot_hour < 5 or p_slot_hour > 22 or p_slot_minute not in (0, 30) then
+    raise exception '고정 수업은 05:00부터 22:00 사이에만 등록할 수 있습니다.';
+  end if;
+
+  if p_duration_minutes not in (30, 60) then
+    raise exception '고정 수업 시간은 30분 또는 1시간만 선택할 수 있습니다.';
   end if;
 
   target_capacity := public.active_member_lesson_capacity(p_user_id);
@@ -1393,14 +2079,14 @@ begin
 
   select
     count(*)::integer,
-    min(public.active_member_lesson_capacity(user_id))::integer
+    min(public.active_member_lesson_capacity(fl.user_id))::integer
   into active_fixed_count, min_existing_capacity
-  from public.fixed_lessons
-  where weekday = p_weekday
-    and slot_hour = p_slot_hour
-    and slot_minute = p_slot_minute
-    and is_active = true
-    and user_id <> p_user_id;
+  from public.fixed_lessons fl
+  where fl.weekday = p_weekday
+    and fl.slot_hour = p_slot_hour
+    and fl.slot_minute = p_slot_minute
+    and fl.is_active = true
+    and fl.user_id <> p_user_id;
 
   effective_capacity := least(target_capacity, coalesce(min_existing_capacity, target_capacity));
 
@@ -1408,11 +2094,12 @@ begin
     raise exception '해당 시간에는 이 수업 상품으로 더 배정할 수 없습니다.';
   end if;
 
-  insert into public.fixed_lessons (user_id, weekday, slot_hour, slot_minute, instructor, lesson_capacity)
-  values (p_user_id, p_weekday, p_slot_hour, p_slot_minute, effective_instructor, target_capacity)
+  insert into public.fixed_lessons (user_id, weekday, slot_hour, slot_minute, instructor, duration_minutes, lesson_capacity)
+  values (p_user_id, p_weekday, p_slot_hour, p_slot_minute, effective_instructor, p_duration_minutes, target_capacity)
   on conflict (user_id, weekday, slot_hour, slot_minute) where is_active = true
   do update set
     instructor = excluded.instructor,
+    duration_minutes = excluded.duration_minutes,
     lesson_capacity = target_capacity,
     updated_at = now()
   returning id into lesson_id;
@@ -1441,6 +2128,7 @@ $$;
 drop function if exists public.update_fixed_lesson(uuid, integer, integer, text, integer);
 drop function if exists public.update_fixed_lesson(uuid, integer, integer, integer, text);
 drop function if exists public.update_fixed_lesson(uuid, integer, integer, integer, text, integer);
+drop function if exists public.update_fixed_lesson(uuid, integer, integer, integer, integer, text);
 drop function if exists public.cancel_fixed_lesson(uuid);
 
 create or replace function public.update_fixed_lesson(
@@ -1448,7 +2136,8 @@ create or replace function public.update_fixed_lesson(
   p_weekday integer,
   p_slot_hour integer,
   p_slot_minute integer,
-  p_instructor text
+  p_instructor text default '',
+  p_duration_minutes integer default 60
 )
 returns uuid
 language plpgsql
@@ -1473,8 +2162,12 @@ begin
     raise exception '수정할 고정 수업을 확인해주세요.';
   end if;
 
-  if p_weekday < 1 or p_weekday > 7 or p_slot_hour < 0 or p_slot_hour > 23 or p_slot_minute not in (0, 30) then
-    raise exception '고정 수업 요일과 시간을 확인해주세요.';
+  if p_weekday < 1 or p_weekday > 7 or p_slot_hour < 5 or p_slot_hour > 22 or p_slot_minute not in (0, 30) then
+    raise exception '고정 수업은 05:00부터 22:00 사이에만 등록할 수 있습니다.';
+  end if;
+
+  if p_duration_minutes not in (30, 60) then
+    raise exception '고정 수업 시간은 30분 또는 1시간만 선택할 수 있습니다.';
   end if;
 
   select *
@@ -1496,14 +2189,14 @@ begin
 
   select
     count(*)::integer,
-    min(public.active_member_lesson_capacity(user_id))::integer
+    min(public.active_member_lesson_capacity(fl.user_id))::integer
   into active_fixed_count, min_existing_capacity
-  from public.fixed_lessons
-  where weekday = p_weekday
-    and slot_hour = p_slot_hour
-    and slot_minute = p_slot_minute
-    and is_active = true
-    and id <> p_fixed_lesson_id;
+  from public.fixed_lessons fl
+  where fl.weekday = p_weekday
+    and fl.slot_hour = p_slot_hour
+    and fl.slot_minute = p_slot_minute
+    and fl.is_active = true
+    and fl.id <> p_fixed_lesson_id;
 
   effective_capacity := least(target_capacity, coalesce(min_existing_capacity, target_capacity));
 
@@ -1517,6 +2210,7 @@ begin
     slot_hour = p_slot_hour,
     slot_minute = p_slot_minute,
     instructor = effective_instructor,
+    duration_minutes = p_duration_minutes,
     lesson_capacity = target_capacity,
     updated_at = now()
   where id = p_fixed_lesson_id;
@@ -1802,8 +2496,8 @@ begin
     raise exception '관리자 권한이 필요합니다.';
   end if;
 
-  if p_slot_date is null or p_slot_hour < 0 or p_slot_hour > 23 or p_slot_minute not in (0, 30) then
-    raise exception '추가할 수업 날짜와 시간을 확인해주세요.';
+  if p_slot_date is null or p_slot_hour < 5 or p_slot_hour > 22 or p_slot_minute not in (0, 30) then
+    raise exception '수업은 05:00부터 22:00 사이에만 열 수 있습니다.';
   end if;
 
   if length(trim(coalesce(p_instructor, ''))) = 0 then
@@ -1984,11 +2678,13 @@ end;
 $$;
 
 drop function if exists public.admin_assign_lesson_reservation(uuid, uuid);
+drop function if exists public.admin_assign_lesson_reservation(uuid, uuid, integer);
 drop function if exists public.admin_cancel_lesson_reservation(uuid, uuid);
 
 create or replace function public.admin_assign_lesson_reservation(
   p_slot_id uuid,
-  p_user_id uuid
+  p_user_id uuid,
+  p_duration_minutes integer default 60
 )
 returns uuid
 language plpgsql
@@ -2008,6 +2704,10 @@ begin
 
   if p_slot_id is null or p_user_id is null then
     raise exception '배정할 수업과 회원을 확인해주세요.';
+  end if;
+
+  if p_duration_minutes not in (30, 60) then
+    raise exception '배정 수업 시간은 30분 또는 1시간만 선택할 수 있습니다.';
   end if;
 
   select *
@@ -2036,6 +2736,22 @@ begin
     raise exception '배정할 회원을 찾을 수 없습니다.';
   end if;
 
+  select *
+  into existing_reservation
+  from public.reservations
+  where slot_id = p_slot_id
+    and user_id = p_user_id
+    and status = 'reserved'
+    and canceled_at is null;
+
+  if found then
+    update public.reservations
+    set duration_minutes = p_duration_minutes
+    where id = existing_reservation.id;
+
+    return existing_reservation.id;
+  end if;
+
   if target_profile.pass_balance <= 0 then
     raise exception '남은 횟수권이 없는 회원입니다.';
   end if;
@@ -2052,22 +2768,10 @@ begin
     raise exception '이미 해당 시간에 고정 수업이 있는 회원입니다.';
   end if;
 
-  select *
-  into existing_reservation
-  from public.reservations
-  where slot_id = p_slot_id
-    and user_id = p_user_id
-    and status = 'reserved'
-    and canceled_at is null;
-
-  if found then
-    return existing_reservation.id;
-  end if;
-
   perform public.assert_lesson_slot_can_accept_member(p_slot_id, p_user_id);
 
-  insert into public.reservations (slot_id, user_id, status)
-  values (p_slot_id, p_user_id, 'reserved')
+  insert into public.reservations (slot_id, user_id, status, duration_minutes)
+  values (p_slot_id, p_user_id, 'reserved', p_duration_minutes)
   returning id into new_reservation_id;
 
   update public.profiles
@@ -2149,12 +2853,77 @@ begin
 end;
 $$;
 
+drop function if exists public.admin_cancel_fixed_lesson_attendance(uuid, uuid);
+
+create or replace function public.admin_cancel_fixed_lesson_attendance(
+  p_slot_id uuid,
+  p_fixed_lesson_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_slot public.lesson_slots%rowtype;
+  current_fixed_lesson public.fixed_lessons%rowtype;
+begin
+  if coalesce(public.current_user_role()::text, '') <> 'admin' then
+    raise exception '관리자 권한이 필요합니다.';
+  end if;
+
+  if p_slot_id is null or p_fixed_lesson_id is null then
+    raise exception '제외할 수업과 회원을 확인해주세요.';
+  end if;
+
+  select *
+  into current_slot
+  from public.lesson_slots
+  where id = p_slot_id
+  for update;
+
+  if not found then
+    raise exception '수업을 찾을 수 없습니다.';
+  end if;
+
+  if current_slot.starts_at <= now() then
+    raise exception '지난 수업의 고정 회원은 제외할 수 없습니다.';
+  end if;
+
+  select *
+  into current_fixed_lesson
+  from public.fixed_lessons
+  where id = p_fixed_lesson_id
+    and is_active = true
+  for update;
+
+  if not found then
+    raise exception '제외할 고정 수업을 찾을 수 없습니다.';
+  end if;
+
+  if current_fixed_lesson.weekday <> extract(isodow from current_slot.starts_at at time zone 'Asia/Seoul')::integer
+    or current_fixed_lesson.slot_hour <> extract(hour from current_slot.starts_at at time zone 'Asia/Seoul')::integer
+    or current_fixed_lesson.slot_minute <> extract(minute from current_slot.starts_at at time zone 'Asia/Seoul')::integer
+  then
+    raise exception '해당 시간의 고정 회원이 아닙니다.';
+  end if;
+
+  insert into public.lesson_absences (fixed_lesson_id, slot_id, user_id)
+  values (current_fixed_lesson.id, current_slot.id, current_fixed_lesson.user_id)
+  on conflict (fixed_lesson_id, slot_id) where canceled_at is null do nothing;
+end;
+$$;
+
 drop function if exists public.create_lesson_change_request(uuid);
+drop function if exists public.create_lesson_change_request(uuid, uuid);
 drop function if exists public.cancel_lesson_change_request(uuid);
 drop function if exists public.review_lesson_change_request(uuid, boolean);
 drop function if exists public.get_lesson_change_requests();
 
-create or replace function public.create_lesson_change_request(p_target_slot_id uuid)
+create or replace function public.create_lesson_change_request(
+  p_source_slot_id uuid,
+  p_target_slot_id uuid
+)
 returns uuid
 language plpgsql
 security definer
@@ -2162,8 +2931,9 @@ set search_path = public
 as $$
 declare
   current_profile public.profiles%rowtype;
+  source_slot public.lesson_slots%rowtype;
   target_slot public.lesson_slots%rowtype;
-  source_slot_id uuid;
+  source_fixed_lesson_id uuid;
   active_absence_count integer;
   reservation_count integer;
   request_id uuid;
@@ -2172,7 +2942,7 @@ begin
     raise exception '로그인이 필요합니다.';
   end if;
 
-  perform public.sync_lesson_slots((now() at time zone 'Asia/Seoul')::date, 28);
+  perform public.sync_lesson_slots((now() at time zone 'Asia/Seoul')::date, 30);
 
   select *
   into current_profile
@@ -2197,6 +2967,41 @@ begin
   end if;
 
   select *
+  into source_slot
+  from public.lesson_slots
+  where id = p_source_slot_id
+    and is_active = true
+  for update;
+
+  if not found or source_slot.starts_at <= now() then
+    raise exception '변경할 고정수업 시간을 확인해주세요.';
+  end if;
+
+  select fl.id
+  into source_fixed_lesson_id
+  from public.fixed_lessons fl
+  where fl.user_id = auth.uid()
+    and fl.is_active = true
+    and fl.weekday = extract(isodow from source_slot.starts_at at time zone 'Asia/Seoul')::integer
+    and fl.slot_hour = extract(hour from source_slot.starts_at at time zone 'Asia/Seoul')::integer
+    and fl.slot_minute = extract(minute from source_slot.starts_at at time zone 'Asia/Seoul')::integer
+  limit 1;
+
+  if source_fixed_lesson_id is null then
+    raise exception '변경할 본인의 고정수업을 확인해주세요.';
+  end if;
+
+  if exists (
+    select 1
+    from public.lesson_absences la
+    where la.fixed_lesson_id = source_fixed_lesson_id
+      and la.slot_id = p_source_slot_id
+      and la.canceled_at is null
+  ) then
+    raise exception '이미 결석 처리된 고정수업은 변경 요청할 수 없습니다.';
+  end if;
+
+  select *
   into target_slot
   from public.lesson_slots
   where id = p_target_slot_id
@@ -2207,32 +3012,7 @@ begin
     raise exception '변경 요청할 수업 시간을 확인해주세요.';
   end if;
 
-  select s.id
-  into source_slot_id
-  from public.lesson_slots s
-  join public.fixed_lessons fl
-    on fl.weekday = extract(isodow from s.starts_at at time zone 'Asia/Seoul')::integer
-    and fl.slot_hour = extract(hour from s.starts_at at time zone 'Asia/Seoul')::integer
-    and fl.slot_minute = extract(minute from s.starts_at at time zone 'Asia/Seoul')::integer
-    and fl.user_id = auth.uid()
-    and fl.is_active = true
-  where s.is_active = true
-    and s.starts_at > now()
-    and not exists (
-      select 1
-      from public.lesson_absences la
-      where la.fixed_lesson_id = fl.id
-        and la.slot_id = s.id
-        and la.canceled_at is null
-    )
-  order by s.starts_at asc
-  limit 1;
-
-  if source_slot_id is null then
-    raise exception '변경 요청할 다음 고정수업이 없습니다.';
-  end if;
-
-  if source_slot_id = p_target_slot_id then
+  if p_source_slot_id = p_target_slot_id then
     raise exception '같은 수업으로는 변경 요청할 수 없습니다.';
   end if;
 
@@ -2279,7 +3059,7 @@ begin
   perform public.assert_lesson_slot_can_accept_member(p_target_slot_id, auth.uid());
 
   insert into public.lesson_change_requests (user_id, source_slot_id, target_slot_id)
-  values (auth.uid(), source_slot_id, p_target_slot_id)
+  values (auth.uid(), p_source_slot_id, p_target_slot_id)
   returning id into request_id;
 
   return request_id;
@@ -2483,9 +3263,279 @@ begin
 end;
 $$;
 
+drop function if exists public.create_lesson_absence_request(uuid);
+drop function if exists public.cancel_lesson_absence_request(uuid);
+drop function if exists public.review_lesson_absence_request(uuid, boolean);
+drop function if exists public.get_lesson_absence_requests();
+
+create or replace function public.create_lesson_absence_request(p_slot_id uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_profile public.profiles%rowtype;
+  current_slot public.lesson_slots%rowtype;
+  current_fixed_lesson public.fixed_lessons%rowtype;
+  request_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception '로그인이 필요합니다.';
+  end if;
+
+  if p_slot_id is null then
+    raise exception '취소할 수업을 확인해주세요.';
+  end if;
+
+  perform public.sync_lesson_slots((now() at time zone 'Asia/Seoul')::date, 30);
+  perform pg_advisory_xact_lock(hashtext(p_slot_id::text));
+
+  select *
+  into current_slot
+  from public.lesson_slots
+  where id = p_slot_id
+    and is_active = true
+  for update;
+
+  if not found or current_slot.starts_at <= now() then
+    raise exception '취소할 수업 시간을 확인해주세요.';
+  end if;
+
+  select *
+  into current_profile
+  from public.profiles
+  where id = auth.uid()
+  for update;
+
+  if not found or current_profile.role <> 'member' then
+    raise exception '회원 계정으로만 수업 취소를 요청할 수 있습니다.';
+  end if;
+
+  select *
+  into current_fixed_lesson
+  from public.fixed_lessons fl
+  where fl.user_id = auth.uid()
+    and fl.is_active = true
+    and fl.weekday = extract(isodow from current_slot.starts_at at time zone 'Asia/Seoul')::integer
+    and fl.slot_hour = extract(hour from current_slot.starts_at at time zone 'Asia/Seoul')::integer
+    and fl.slot_minute = extract(minute from current_slot.starts_at at time zone 'Asia/Seoul')::integer
+  for update;
+
+  if not found then
+    raise exception '본인의 고정 수업만 취소 요청할 수 있습니다.';
+  end if;
+
+  if exists (
+    select 1
+    from public.lesson_absences la
+    where la.fixed_lesson_id = current_fixed_lesson.id
+      and la.slot_id = p_slot_id
+      and la.user_id = auth.uid()
+      and la.canceled_at is null
+  ) then
+    raise exception '이미 취소 처리된 수업입니다.';
+  end if;
+
+  if exists (
+    select 1
+    from public.lesson_absence_requests lar
+    where lar.user_id = auth.uid()
+      and lar.slot_id = p_slot_id
+      and lar.status = 'pending'
+  ) then
+    raise exception '이미 승인 대기 중인 수업 취소 요청입니다.';
+  end if;
+
+  perform public.assert_lesson_absence_request_deadline(current_slot.starts_at, now());
+  perform public.assert_member_absence_request_limit(auth.uid());
+
+  insert into public.lesson_absence_requests (user_id, fixed_lesson_id, slot_id)
+  values (auth.uid(), current_fixed_lesson.id, p_slot_id)
+  returning id into request_id;
+
+  return request_id;
+end;
+$$;
+
+create or replace function public.cancel_lesson_absence_request(p_request_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception '로그인이 필요합니다.';
+  end if;
+
+  update public.lesson_absence_requests
+  set status = 'canceled'
+  where id = p_request_id
+    and user_id = auth.uid()
+    and status = 'pending';
+
+  if not found then
+    raise exception '취소할 요청을 찾을 수 없습니다.';
+  end if;
+end;
+$$;
+
+create or replace function public.review_lesson_absence_request(
+  p_request_id uuid,
+  p_approved boolean
+)
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  request_row public.lesson_absence_requests%rowtype;
+  target_slot public.lesson_slots%rowtype;
+  current_fixed_lesson public.fixed_lessons%rowtype;
+begin
+  if auth.uid() is null then
+    raise exception '로그인이 필요합니다.';
+  end if;
+
+  if coalesce(public.current_user_role()::text, '') <> 'admin' then
+    raise exception '관리자 권한이 필요합니다.';
+  end if;
+
+  select *
+  into request_row
+  from public.lesson_absence_requests
+  where id = p_request_id
+  for update;
+
+  if not found or request_row.status <> 'pending' then
+    raise exception '처리할 수업 취소 요청을 찾을 수 없습니다.';
+  end if;
+
+  if not p_approved then
+    update public.lesson_absence_requests
+    set
+      status = 'rejected',
+      reviewed_by = auth.uid(),
+      reviewed_at = now()
+    where id = p_request_id;
+
+    return 'rejected';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext(request_row.slot_id::text));
+
+  select *
+  into target_slot
+  from public.lesson_slots
+  where id = request_row.slot_id
+    and is_active = true
+  for update;
+
+  if not found or target_slot.starts_at <= now() then
+    raise exception '요청한 취소 수업 시간을 확인할 수 없습니다.';
+  end if;
+
+  select *
+  into current_fixed_lesson
+  from public.fixed_lessons fl
+  where fl.id = request_row.fixed_lesson_id
+    and fl.user_id = request_row.user_id
+    and fl.is_active = true
+    and fl.weekday = extract(isodow from target_slot.starts_at at time zone 'Asia/Seoul')::integer
+    and fl.slot_hour = extract(hour from target_slot.starts_at at time zone 'Asia/Seoul')::integer
+    and fl.slot_minute = extract(minute from target_slot.starts_at at time zone 'Asia/Seoul')::integer
+  for update;
+
+  if not found then
+    raise exception '회원의 고정 수업을 확인할 수 없습니다.';
+  end if;
+
+  if exists (
+    select 1
+    from public.lesson_absences la
+    where la.fixed_lesson_id = current_fixed_lesson.id
+      and la.slot_id = request_row.slot_id
+      and la.user_id = request_row.user_id
+      and la.canceled_at is null
+  ) then
+    raise exception '이미 취소 처리된 수업입니다.';
+  end if;
+
+  perform public.assert_lesson_absence_request_deadline(target_slot.starts_at, request_row.created_at);
+  perform public.assert_member_absence_request_limit(request_row.user_id, p_request_id);
+
+  insert into public.lesson_absences (fixed_lesson_id, slot_id, user_id)
+  values (current_fixed_lesson.id, request_row.slot_id, request_row.user_id);
+
+  update public.lesson_absence_requests
+  set
+    status = 'approved',
+    reviewed_by = auth.uid(),
+    reviewed_at = now()
+  where id = p_request_id;
+
+  return 'approved';
+end;
+$$;
+
+create or replace function public.get_lesson_absence_requests()
+returns table (
+  id uuid,
+  user_id uuid,
+  user_name text,
+  slot_id uuid,
+  starts_at timestamptz,
+  instructor text,
+  status text,
+  created_at timestamptz,
+  reviewed_at timestamptz,
+  reviewed_by_name text
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  is_admin boolean;
+begin
+  if auth.uid() is null then
+    raise exception '로그인이 필요합니다.';
+  end if;
+
+  is_admin := public.current_user_role() = 'admin';
+
+  return query
+    select
+      lar.id,
+      lar.user_id,
+      p.name as user_name,
+      lar.slot_id,
+      s.starts_at,
+      s.instructor,
+      lar.status,
+      lar.created_at,
+      lar.reviewed_at,
+      rp.name as reviewed_by_name
+    from public.lesson_absence_requests lar
+    join public.profiles p on p.id = lar.user_id
+    join public.lesson_slots s on s.id = lar.slot_id
+    left join public.profiles rp on rp.id = lar.reviewed_by
+    where (is_admin or lar.user_id = auth.uid())
+      and (lar.status = 'pending' or lar.created_at >= now() - interval '30 days')
+    order by
+      case when lar.status = 'pending' then 0 else 1 end,
+      lar.created_at desc;
+end;
+$$;
+
 drop function if exists public.create_lesson_assignment_request(uuid, text);
 drop function if exists public.cancel_lesson_assignment_request(uuid);
+drop function if exists public.cancel_my_lesson_reservation(uuid);
 drop function if exists public.review_lesson_assignment_request(uuid, boolean);
+drop function if exists public.review_lesson_assignment_request(uuid, boolean, text);
 drop function if exists public.get_lesson_assignment_requests();
 drop function if exists public.slot_has_assignment(uuid);
 drop function if exists public.lesson_slot_has_member(uuid, uuid);
@@ -2494,11 +3544,22 @@ drop function if exists public.get_lesson_feedbacks();
 drop function if exists public.get_lesson_feedback_targets(integer);
 drop function if exists public.create_special_lesson(text, text, timestamptz, text, integer, integer);
 drop function if exists public.create_special_lesson(text, text, timestamptz, text, integer, integer, text);
+drop function if exists public.update_special_lesson(uuid, text, text, timestamptz, text, integer, integer, text);
 drop function if exists public.apply_special_lesson(uuid);
 drop function if exists public.cancel_special_lesson_registration(uuid);
 drop function if exists public.review_special_lesson_registration(uuid, boolean);
 drop function if exists public.get_special_lessons();
 drop function if exists public.get_special_lesson_registrations();
+drop function if exists public.create_member_request(text, text);
+drop function if exists public.review_member_request(uuid, text, text);
+drop function if exists public.get_member_requests();
+drop function if exists public.create_store_product(text, text, integer, integer);
+drop function if exists public.create_store_product(text, text, text, integer, integer);
+drop function if exists public.get_store_products();
+drop function if exists public.create_store_order(uuid, integer);
+drop function if exists public.cancel_store_order(uuid);
+drop function if exists public.review_store_order(uuid, boolean, text);
+drop function if exists public.get_store_orders();
 
 create or replace function public.slot_has_assignment(p_slot_id uuid)
 returns boolean
@@ -2538,6 +3599,7 @@ as $$
 declare
   current_profile public.profiles%rowtype;
   target_slot public.lesson_slots%rowtype;
+  target_hour integer;
   normalized_type text := coalesce(p_request_type, '');
   request_id uuid;
 begin
@@ -2549,7 +3611,7 @@ begin
     raise exception '신청 종류를 확인해주세요.';
   end if;
 
-  perform public.sync_lesson_slots((now() at time zone 'Asia/Seoul')::date, 28);
+  perform public.sync_lesson_slots((now() at time zone 'Asia/Seoul')::date, 30);
 
   select *
   into current_profile
@@ -2569,6 +3631,16 @@ begin
 
   if not found or target_slot.starts_at <= now() then
     raise exception '신청할 수업 시간을 확인해주세요.';
+  end if;
+
+  if target_slot.starts_at > now() + interval '30 days' then
+    raise exception '추가 수업과 자유수영은 30일 이내 시간만 신청할 수 있습니다.';
+  end if;
+
+  target_hour := extract(hour from target_slot.starts_at at time zone 'Asia/Seoul')::integer;
+
+  if target_hour < 5 or target_hour > 22 then
+    raise exception '수업과 자유수영은 05:00부터 22:00 사이에만 신청할 수 있습니다.';
   end if;
 
   if exists (
@@ -2644,9 +3716,106 @@ begin
 end;
 $$;
 
+create or replace function public.cancel_my_lesson_reservation(p_slot_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_profile public.profiles%rowtype;
+  current_slot public.lesson_slots%rowtype;
+  current_reservation public.reservations%rowtype;
+  refund_count integer;
+  next_balance integer;
+begin
+  if auth.uid() is null then
+    raise exception '로그인이 필요합니다.';
+  end if;
+
+  if p_slot_id is null then
+    raise exception '취소할 수업을 확인해주세요.';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext(p_slot_id::text));
+
+  select *
+  into current_slot
+  from public.lesson_slots
+  where id = p_slot_id
+  for update;
+
+  if not found then
+    raise exception '취소할 수업 시간을 확인할 수 없습니다.';
+  end if;
+
+  if (now() at time zone 'Asia/Seoul')::date >= (current_slot.starts_at at time zone 'Asia/Seoul')::date then
+    raise exception '수업 취소는 수업 전날까지만 가능합니다.';
+  end if;
+
+  select *
+  into current_profile
+  from public.profiles
+  where id = auth.uid()
+  for update;
+
+  if not found or current_profile.role <> 'member' then
+    raise exception '회원 계정으로만 수업을 취소할 수 있습니다.';
+  end if;
+
+  select *
+  into current_reservation
+  from public.reservations
+  where slot_id = p_slot_id
+    and user_id = auth.uid()
+    and status = 'reserved'
+    and canceled_at is null
+  for update;
+
+  if not found then
+    raise exception '취소할 수업을 찾을 수 없습니다.';
+  end if;
+
+  update public.reservations
+  set canceled_at = now()
+  where id = current_reservation.id;
+
+  select coalesce(sum(-pt.amount), 0)::integer
+  into refund_count
+  from public.pass_transactions pt
+  where pt.reservation_id = current_reservation.id
+    and pt.amount < 0;
+
+  if refund_count > 0 then
+    update public.profiles
+    set pass_balance = pass_balance + refund_count
+    where id = auth.uid()
+    returning pass_balance into next_balance;
+
+    perform public.sync_member_pass_balance(auth.uid(), next_balance);
+
+    insert into public.pass_transactions (user_id, amount, balance_after, reason, reservation_id, created_by)
+    values (auth.uid(), refund_count, next_balance, 'member_lesson_reservation_canceled', current_reservation.id, auth.uid());
+  end if;
+
+  update public.lesson_assignment_requests
+  set status = 'canceled'
+  where id = (
+    select lar.id
+    from public.lesson_assignment_requests lar
+    where lar.user_id = auth.uid()
+      and lar.slot_id = p_slot_id
+      and lar.status = 'approved'
+    order by lar.reviewed_at desc nulls last, lar.created_at desc
+    limit 1
+  );
+end;
+$$;
+
 create or replace function public.review_lesson_assignment_request(
   p_request_id uuid,
-  p_approved boolean
+  p_approved boolean,
+  p_review_comment text default ''
 )
 returns text
 language plpgsql
@@ -2657,8 +3826,10 @@ declare
   request_row public.lesson_assignment_requests%rowtype;
   target_slot public.lesson_slots%rowtype;
   target_profile public.profiles%rowtype;
+  target_hour integer;
   new_reservation_id uuid;
   next_balance integer;
+  normalized_comment text := left(trim(coalesce(p_review_comment, '')), 120);
 begin
   if auth.uid() is null then
     raise exception '로그인이 필요합니다.';
@@ -2682,6 +3853,7 @@ begin
     update public.lesson_assignment_requests
     set
       status = 'rejected',
+      review_comment = normalized_comment,
       reviewed_by = auth.uid(),
       reviewed_at = now()
     where id = p_request_id;
@@ -2697,6 +3869,12 @@ begin
 
   if not found or target_slot.starts_at <= now() then
     raise exception '신청한 시간을 확인할 수 없습니다.';
+  end if;
+
+  target_hour := extract(hour from target_slot.starts_at at time zone 'Asia/Seoul')::integer;
+
+  if target_hour < 5 or target_hour > 22 then
+    raise exception '수업과 자유수영은 05:00부터 22:00 사이에만 처리할 수 있습니다.';
   end if;
 
   select *
@@ -2754,6 +3932,7 @@ begin
   update public.lesson_assignment_requests
   set
     status = 'approved',
+    review_comment = normalized_comment,
     reviewed_by = auth.uid(),
     reviewed_at = now()
   where id = p_request_id;
@@ -2761,6 +3940,7 @@ begin
   update public.lesson_assignment_requests
   set
     status = 'rejected',
+    review_comment = '해당 시간이 다른 회원에게 먼저 배정되었습니다.',
     reviewed_by = auth.uid(),
     reviewed_at = now()
   where id <> p_request_id
@@ -2781,6 +3961,7 @@ returns table (
   instructor text,
   request_type text,
   status text,
+  review_comment text,
   created_at timestamptz,
   reviewed_at timestamptz,
   reviewed_by_name text
@@ -2809,6 +3990,7 @@ begin
       s.instructor,
       lar.request_type,
       lar.status,
+      lar.review_comment,
       lar.created_at,
       lar.reviewed_at,
       rp.name as reviewed_by_name
@@ -3146,6 +4328,79 @@ begin
 end;
 $$;
 
+create or replace function public.update_special_lesson(
+  p_special_lesson_id uuid,
+  p_title text,
+  p_description text,
+  p_starts_at timestamptz,
+  p_instructor text,
+  p_duration_minutes integer,
+  p_capacity integer,
+  p_image_path text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  normalized_title text := btrim(coalesce(p_title, ''));
+  normalized_description text := left(coalesce(p_description, ''), 300);
+  normalized_instructor text := btrim(coalesce(p_instructor, ''));
+  normalized_image_path text := nullif(btrim(coalesce(p_image_path, '')), '');
+  approved_count integer;
+begin
+  if coalesce(public.current_user_role()::text, '') <> 'admin' then
+    raise exception '관리자 권한이 필요합니다.';
+  end if;
+
+  if p_special_lesson_id is null then
+    raise exception '수정할 특별수업을 확인해주세요.';
+  end if;
+
+  if not exists (select 1 from public.special_lessons where id = p_special_lesson_id and is_active = true) then
+    raise exception '수정할 특별수업을 찾을 수 없습니다.';
+  end if;
+
+  if normalized_title = '' then
+    raise exception '특별수업명을 입력해주세요.';
+  end if;
+
+  if p_starts_at is null then
+    raise exception '특별수업 일시를 확인해주세요.';
+  end if;
+
+  if p_duration_minutes not between 30 and 240 then
+    raise exception '수업 시간은 30분에서 240분 사이여야 합니다.';
+  end if;
+
+  if p_capacity not between 1 and 99 then
+    raise exception '모집 인원은 1명에서 99명 사이여야 합니다.';
+  end if;
+
+  select count(*)::integer
+    into approved_count
+  from public.special_lesson_registrations
+  where special_lesson_id = p_special_lesson_id
+    and status = 'approved';
+
+  if p_capacity < approved_count then
+    raise exception '모집 인원은 확정 인원보다 낮게 설정할 수 없습니다.';
+  end if;
+
+  update public.special_lessons
+  set
+    title = normalized_title,
+    description = normalized_description,
+    image_path = coalesce(normalized_image_path, image_path),
+    starts_at = p_starts_at,
+    instructor = normalized_instructor,
+    duration_minutes = p_duration_minutes,
+    capacity = p_capacity
+  where id = p_special_lesson_id;
+end;
+$$;
+
 create or replace function public.apply_special_lesson(p_special_lesson_id uuid)
 returns text
 language plpgsql
@@ -3337,14 +4592,10 @@ stable
 security definer
 set search_path = public
 as $$
-declare
-  is_admin boolean;
 begin
   if auth.uid() is null then
     raise exception '로그인이 필요합니다.';
   end if;
-
-  is_admin := public.current_user_role() = 'admin';
 
   return query
     with ranked_registrations as (
@@ -3389,8 +4640,10 @@ begin
       on mine.special_lesson_id = sl.id
       and mine.user_id = auth.uid()
     where sl.is_active = true
-      and (is_admin or sl.starts_at >= now())
-    order by sl.starts_at asc;
+    order by
+      case when sl.starts_at >= now() then 0 else 1 end,
+      case when sl.starts_at >= now() then sl.starts_at end asc,
+      case when sl.starts_at < now() then sl.starts_at end desc;
 end;
 $$;
 
@@ -3461,6 +4714,408 @@ begin
       and (is_admin or rr.user_id = auth.uid())
       and (is_admin or sl.starts_at >= now() - interval '30 days')
     order by sl.starts_at asc, rr.queue_position asc;
+end;
+$$;
+
+create or replace function public.create_member_request(
+  p_title text,
+  p_body text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  request_id uuid;
+  normalized_title text := btrim(coalesce(p_title, ''));
+  normalized_body text := btrim(coalesce(p_body, ''));
+begin
+  if auth.uid() is null then
+    raise exception '로그인이 필요합니다.';
+  end if;
+
+  if coalesce(public.current_user_role()::text, '') <> 'member' then
+    raise exception '회원 계정으로만 요청할 수 있습니다.';
+  end if;
+
+  if normalized_title = '' or char_length(normalized_title) > 60 then
+    raise exception '제목은 1자에서 60자 사이로 입력해주세요.';
+  end if;
+
+  if normalized_body = '' or char_length(normalized_body) > 500 then
+    raise exception '내용은 1자에서 500자 사이로 입력해주세요.';
+  end if;
+
+  insert into public.member_requests (user_id, title, body)
+  values (auth.uid(), normalized_title, normalized_body)
+  returning id into request_id;
+
+  return request_id;
+end;
+$$;
+
+create or replace function public.review_member_request(
+  p_request_id uuid,
+  p_status text,
+  p_admin_reply text default ''
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  normalized_status text := btrim(coalesce(p_status, ''));
+  normalized_reply text := left(btrim(coalesce(p_admin_reply, '')), 200);
+begin
+  if coalesce(public.current_user_role()::text, '') <> 'admin' then
+    raise exception '관리자 권한이 필요합니다.';
+  end if;
+
+  if normalized_status not in ('reviewing', 'resolved', 'rejected') then
+    raise exception '처리 상태를 확인해주세요.';
+  end if;
+
+  update public.member_requests
+  set
+    status = normalized_status,
+    admin_reply = normalized_reply,
+    reviewed_by = auth.uid(),
+    reviewed_at = now()
+  where id = p_request_id
+    and status in ('pending', 'reviewing');
+
+  if not found then
+    raise exception '처리할 요청을 찾을 수 없습니다.';
+  end if;
+end;
+$$;
+
+create or replace function public.get_member_requests()
+returns table (
+  id uuid,
+  user_id uuid,
+  user_name text,
+  title text,
+  body text,
+  status text,
+  admin_reply text,
+  created_at timestamptz,
+  reviewed_at timestamptz,
+  reviewed_by_name text
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  is_admin boolean;
+begin
+  if auth.uid() is null then
+    raise exception '로그인이 필요합니다.';
+  end if;
+
+  is_admin := public.current_user_role() = 'admin';
+
+  return query
+    select
+      mr.id,
+      mr.user_id,
+      p.name as user_name,
+      mr.title,
+      mr.body,
+      mr.status,
+      mr.admin_reply,
+      mr.created_at,
+      mr.reviewed_at,
+      rp.name as reviewed_by_name
+    from public.member_requests mr
+    join public.profiles p on p.id = mr.user_id
+    left join public.profiles rp on rp.id = mr.reviewed_by
+    where (is_admin or mr.user_id = auth.uid())
+      and (is_admin or mr.status in ('pending', 'reviewing') or mr.created_at >= now() - interval '90 days')
+    order by
+      case when mr.status in ('pending', 'reviewing') then 0 else 1 end,
+      mr.created_at desc;
+end;
+$$;
+
+create or replace function public.create_store_product(
+  p_name text,
+  p_description text,
+  p_image_path text,
+  p_price integer,
+  p_stock_quantity integer
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  product_id uuid;
+  normalized_name text := btrim(coalesce(p_name, ''));
+  normalized_description text := left(coalesce(p_description, ''), 300);
+  normalized_image_path text := nullif(btrim(coalesce(p_image_path, '')), '');
+begin
+  if coalesce(public.current_user_role()::text, '') <> 'admin' then
+    raise exception '관리자 권한이 필요합니다.';
+  end if;
+
+  if normalized_name = '' or char_length(normalized_name) > 60 then
+    raise exception '상품명은 1자에서 60자 사이로 입력해주세요.';
+  end if;
+
+  if coalesce(p_price, -1) < 0 then
+    raise exception '상품 가격을 확인해주세요.';
+  end if;
+
+  if coalesce(p_stock_quantity, -1) < 0 then
+    raise exception '상품 재고를 확인해주세요.';
+  end if;
+
+  insert into public.store_products (name, description, image_path, price, stock_quantity, created_by)
+  values (normalized_name, normalized_description, normalized_image_path, p_price, p_stock_quantity, auth.uid())
+  returning id into product_id;
+
+  return product_id;
+end;
+$$;
+
+create or replace function public.get_store_products()
+returns table (
+  id uuid,
+  name text,
+  description text,
+  image_path text,
+  price integer,
+  stock_quantity integer,
+  is_active boolean,
+  created_at timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  is_admin boolean;
+begin
+  if auth.uid() is null then
+    raise exception '로그인이 필요합니다.';
+  end if;
+
+  is_admin := public.current_user_role() = 'admin';
+
+  return query
+    select
+      sp.id,
+      sp.name,
+      sp.description,
+      sp.image_path,
+      sp.price,
+      sp.stock_quantity,
+      sp.is_active,
+      sp.created_at
+    from public.store_products sp
+    where is_admin or sp.is_active = true
+    order by sp.is_active desc, sp.created_at desc;
+end;
+$$;
+
+create or replace function public.create_store_order(
+  p_product_id uuid,
+  p_quantity integer
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  order_id uuid;
+  target_product public.store_products%rowtype;
+begin
+  if auth.uid() is null then
+    raise exception '로그인이 필요합니다.';
+  end if;
+
+  if coalesce(public.current_user_role()::text, '') <> 'member' then
+    raise exception '회원 계정으로만 구매할 수 있습니다.';
+  end if;
+
+  if coalesce(p_quantity, 0) < 1 or p_quantity > 99 then
+    raise exception '구매 수량은 1개에서 99개 사이여야 합니다.';
+  end if;
+
+  select *
+  into target_product
+  from public.store_products
+  where id = p_product_id
+    and is_active = true
+  for update;
+
+  if not found then
+    raise exception '구매할 상품을 찾을 수 없습니다.';
+  end if;
+
+  if target_product.stock_quantity < p_quantity then
+    raise exception '재고가 부족합니다.';
+  end if;
+
+  update public.store_products
+  set stock_quantity = stock_quantity - p_quantity
+  where id = target_product.id;
+
+  insert into public.store_orders (product_id, user_id, quantity, unit_price, total_price)
+  values (target_product.id, auth.uid(), p_quantity, target_product.price, target_product.price * p_quantity)
+  returning id into order_id;
+
+  return order_id;
+end;
+$$;
+
+create or replace function public.cancel_store_order(p_order_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_order public.store_orders%rowtype;
+begin
+  if auth.uid() is null then
+    raise exception '로그인이 필요합니다.';
+  end if;
+
+  select *
+  into target_order
+  from public.store_orders
+  where id = p_order_id
+    and user_id = auth.uid()
+    and status = 'pending'
+  for update;
+
+  if not found then
+    raise exception '취소할 구매 신청을 찾을 수 없습니다.';
+  end if;
+
+  update public.store_orders
+  set
+    status = 'canceled',
+    reviewed_at = now()
+  where id = target_order.id;
+
+  update public.store_products
+  set stock_quantity = stock_quantity + target_order.quantity
+  where id = target_order.product_id;
+end;
+$$;
+
+create or replace function public.review_store_order(
+  p_order_id uuid,
+  p_approved boolean,
+  p_admin_comment text default ''
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_order public.store_orders%rowtype;
+  next_status text;
+  normalized_comment text := left(btrim(coalesce(p_admin_comment, '')), 200);
+begin
+  if coalesce(public.current_user_role()::text, '') <> 'admin' then
+    raise exception '관리자 권한이 필요합니다.';
+  end if;
+
+  select *
+  into target_order
+  from public.store_orders
+  where id = p_order_id
+    and status = 'pending'
+  for update;
+
+  if not found then
+    raise exception '처리할 구매 신청을 찾을 수 없습니다.';
+  end if;
+
+  next_status := case when p_approved then 'confirmed' else 'canceled' end;
+
+  update public.store_orders
+  set
+    status = next_status,
+    admin_comment = normalized_comment,
+    reviewed_by = auth.uid(),
+    reviewed_at = now()
+  where id = target_order.id;
+
+  if not p_approved then
+    update public.store_products
+    set stock_quantity = stock_quantity + target_order.quantity
+    where id = target_order.product_id;
+  end if;
+end;
+$$;
+
+create or replace function public.get_store_orders()
+returns table (
+  id uuid,
+  product_id uuid,
+  product_name text,
+  user_id uuid,
+  user_name text,
+  quantity integer,
+  unit_price integer,
+  total_price integer,
+  status text,
+  admin_comment text,
+  created_at timestamptz,
+  reviewed_at timestamptz,
+  reviewed_by_name text
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  is_admin boolean;
+begin
+  if auth.uid() is null then
+    raise exception '로그인이 필요합니다.';
+  end if;
+
+  is_admin := public.current_user_role() = 'admin';
+
+  return query
+    select
+      so.id,
+      so.product_id,
+      sp.name as product_name,
+      so.user_id,
+      p.name as user_name,
+      so.quantity,
+      so.unit_price,
+      so.total_price,
+      so.status,
+      so.admin_comment,
+      so.created_at,
+      so.reviewed_at,
+      rp.name as reviewed_by_name
+    from public.store_orders so
+    join public.store_products sp on sp.id = so.product_id
+    join public.profiles p on p.id = so.user_id
+    left join public.profiles rp on rp.id = so.reviewed_by
+    where (is_admin or so.user_id = auth.uid())
+      and (is_admin or so.status = 'pending' or so.created_at >= now() - interval '90 days')
+    order by
+      case when so.status = 'pending' then 0 else 1 end,
+      so.created_at desc;
 end;
 $$;
 
@@ -3556,6 +5211,88 @@ begin
   returning id into new_notice_id;
 
   return new_notice_id;
+end;
+$$;
+
+create or replace function public.update_notice(
+  p_notice_id uuid,
+  p_title text,
+  p_body text,
+  p_image_path text default null,
+  p_replace_image boolean default false
+)
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  previous_image_path text;
+begin
+  if coalesce(public.current_user_role()::text, '') <> 'admin' then
+    raise exception '관리자 권한이 필요합니다.';
+  end if;
+
+  if length(trim(coalesce(p_title, ''))) = 0 or length(trim(coalesce(p_body, ''))) = 0 then
+    raise exception '공지 제목과 내용을 입력해주세요.';
+  end if;
+
+  select image_path
+    into previous_image_path
+  from public.notices
+  where id = p_notice_id;
+
+  if not found then
+    raise exception '수정할 공지를 찾지 못했습니다.';
+  end if;
+
+  update public.notices
+  set
+    title = trim(p_title),
+    body = trim(p_body),
+    image_path = case
+      when p_replace_image then nullif(trim(coalesce(p_image_path, '')), '')
+      else image_path
+    end,
+    updated_at = now()
+  where id = p_notice_id;
+
+  if p_replace_image then
+    return previous_image_path;
+  end if;
+
+  return null;
+end;
+$$;
+
+create or replace function public.delete_notice(
+  p_notice_id uuid
+)
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  previous_image_path text;
+begin
+  if coalesce(public.current_user_role()::text, '') <> 'admin' then
+    raise exception '관리자 권한이 필요합니다.';
+  end if;
+
+  select image_path
+    into previous_image_path
+  from public.notices
+  where id = p_notice_id;
+
+  if not found then
+    raise exception '삭제할 공지를 찾지 못했습니다.';
+  end if;
+
+  delete from public.notices
+  where id = p_notice_id;
+
+  return previous_image_path;
 end;
 $$;
 
@@ -3742,21 +5479,21 @@ begin
   end if;
 
   if current_profile.role = 'admin' then
-    raise exception '관리자는 결석 처리할 수 없습니다.';
+    raise exception '관리자는 수업 취소 요청을 만들 수 없습니다.';
   end if;
 
   select *
   into current_fixed_lesson
-  from public.fixed_lessons
-  where user_id = auth.uid()
-    and is_active = true
-    and weekday = extract(isodow from current_slot.starts_at at time zone 'Asia/Seoul')::integer
-    and slot_hour = extract(hour from current_slot.starts_at at time zone 'Asia/Seoul')::integer
-    and slot_minute = extract(minute from current_slot.starts_at at time zone 'Asia/Seoul')::integer
+  from public.fixed_lessons fl
+  where fl.user_id = auth.uid()
+    and fl.is_active = true
+    and fl.weekday = extract(isodow from current_slot.starts_at at time zone 'Asia/Seoul')::integer
+    and fl.slot_hour = extract(hour from current_slot.starts_at at time zone 'Asia/Seoul')::integer
+    and fl.slot_minute = extract(minute from current_slot.starts_at at time zone 'Asia/Seoul')::integer
   for update;
 
   if not found then
-    raise exception '본인의 고정 수업만 결석 처리할 수 있습니다.';
+    raise exception '본인의 고정 수업만 취소 요청할 수 있습니다.';
   end if;
 
   select *
@@ -3782,7 +5519,7 @@ begin
       and canceled_at is null;
 
     if substitute_count >= active_absence_count then
-      raise exception '이미 다른 회원이 대체 예약한 수업은 결석 취소할 수 없습니다.';
+      raise exception '이미 다른 회원이 대체 예약한 수업은 취소 철회할 수 없습니다.';
     end if;
 
     update public.lesson_absences
@@ -3792,10 +5529,9 @@ begin
     return 'absenceCanceled';
   end if;
 
-  insert into public.lesson_absences (fixed_lesson_id, slot_id, user_id)
-  values (current_fixed_lesson.id, p_slot_id, auth.uid());
+  perform public.create_lesson_absence_request(p_slot_id);
 
-  return 'absenceCreated';
+  return 'absenceRequested';
 end;
 $$;
 
@@ -3891,7 +5627,7 @@ begin
   into has_own_fixed_lesson;
 
   if has_own_fixed_lesson then
-    raise exception '본인의 고정 수업은 결석 처리로 열어주세요.';
+    raise exception '본인의 고정 수업은 수업 취소 요청으로 열어주세요.';
   end if;
 
   select count(*)::integer
@@ -3963,48 +5699,74 @@ grant usage on schema public to authenticated;
 grant select on public.profiles to authenticated;
 grant select on public.member_passes to authenticated;
 grant select on public.lesson_slots to authenticated;
+grant select on public.instructor_lesson_times to authenticated;
 grant select on public.fixed_lessons to authenticated;
 grant select on public.lesson_absences to authenticated;
+grant select on public.lesson_absence_requests to authenticated;
 grant select on public.reservations to authenticated;
 grant select on public.lesson_change_requests to authenticated;
 grant select on public.lesson_assignment_requests to authenticated;
 grant select on public.lesson_feedbacks to authenticated;
 grant select on public.special_lessons to authenticated;
 grant select on public.special_lesson_registrations to authenticated;
+grant select on public.member_requests to authenticated;
+grant select on public.store_products to authenticated;
+grant select on public.store_orders to authenticated;
 grant select on public.pass_transactions to authenticated;
 grant select on public.notices to authenticated;
 grant execute on function public.current_user_role() to authenticated;
 grant execute on function public.get_lesson_slots_snapshot(date, integer) to authenticated;
 grant execute on function public.get_member_summaries() to authenticated;
 grant execute on function public.get_my_fixed_lessons() to authenticated;
-grant execute on function public.upsert_fixed_lesson(uuid, integer, integer, integer, text) to authenticated;
-grant execute on function public.update_fixed_lesson(uuid, integer, integer, integer, text) to authenticated;
+grant execute on function public.get_instructor_lesson_times() to authenticated;
+grant execute on function public.upsert_instructor_lesson_time(uuid, text, integer, integer, integer) to authenticated;
+grant execute on function public.cancel_instructor_lesson_time(uuid) to authenticated;
+grant execute on function public.upsert_fixed_lesson(uuid, integer, integer, integer, text, integer) to authenticated;
+grant execute on function public.update_fixed_lesson(uuid, integer, integer, integer, text, integer) to authenticated;
 grant execute on function public.cancel_fixed_lesson(uuid) to authenticated;
 grant execute on function public.update_lesson_slot_instructor(uuid, text) to authenticated;
 grant execute on function public.create_lesson_slot(date, integer, integer, text, integer, integer) to authenticated;
 grant execute on function public.update_lesson_slot_details(uuid, text, integer, integer) to authenticated;
 grant execute on function public.cancel_lesson_slot(uuid) to authenticated;
-grant execute on function public.admin_assign_lesson_reservation(uuid, uuid) to authenticated;
+grant execute on function public.admin_assign_lesson_reservation(uuid, uuid, integer) to authenticated;
 grant execute on function public.admin_cancel_lesson_reservation(uuid, uuid) to authenticated;
-grant execute on function public.create_lesson_change_request(uuid) to authenticated;
+grant execute on function public.admin_cancel_fixed_lesson_attendance(uuid, uuid) to authenticated;
+grant execute on function public.create_lesson_change_request(uuid, uuid) to authenticated;
 grant execute on function public.cancel_lesson_change_request(uuid) to authenticated;
 grant execute on function public.review_lesson_change_request(uuid, boolean) to authenticated;
 grant execute on function public.get_lesson_change_requests() to authenticated;
+grant execute on function public.create_lesson_absence_request(uuid) to authenticated;
+grant execute on function public.cancel_lesson_absence_request(uuid) to authenticated;
+grant execute on function public.review_lesson_absence_request(uuid, boolean) to authenticated;
+grant execute on function public.get_lesson_absence_requests() to authenticated;
 grant execute on function public.create_lesson_assignment_request(uuid, text) to authenticated;
 grant execute on function public.cancel_lesson_assignment_request(uuid) to authenticated;
-grant execute on function public.review_lesson_assignment_request(uuid, boolean) to authenticated;
+grant execute on function public.cancel_my_lesson_reservation(uuid) to authenticated;
+grant execute on function public.review_lesson_assignment_request(uuid, boolean, text) to authenticated;
 grant execute on function public.get_lesson_assignment_requests() to authenticated;
 grant execute on function public.upsert_lesson_feedback(uuid, uuid, text, text, text) to authenticated;
 grant execute on function public.get_lesson_feedbacks() to authenticated;
 grant execute on function public.get_lesson_feedback_targets(integer) to authenticated;
 grant execute on function public.create_special_lesson(text, text, timestamptz, text, integer, integer, text) to authenticated;
+grant execute on function public.update_special_lesson(uuid, text, text, timestamptz, text, integer, integer, text) to authenticated;
 grant execute on function public.apply_special_lesson(uuid) to authenticated;
 grant execute on function public.cancel_special_lesson_registration(uuid) to authenticated;
 grant execute on function public.review_special_lesson_registration(uuid, boolean) to authenticated;
 grant execute on function public.get_special_lessons() to authenticated;
 grant execute on function public.get_special_lesson_registrations() to authenticated;
+grant execute on function public.create_member_request(text, text) to authenticated;
+grant execute on function public.review_member_request(uuid, text, text) to authenticated;
+grant execute on function public.get_member_requests() to authenticated;
+grant execute on function public.create_store_product(text, text, text, integer, integer) to authenticated;
+grant execute on function public.get_store_products() to authenticated;
+grant execute on function public.create_store_order(uuid, integer) to authenticated;
+grant execute on function public.cancel_store_order(uuid) to authenticated;
+grant execute on function public.review_store_order(uuid, boolean, text) to authenticated;
+grant execute on function public.get_store_orders() to authenticated;
 grant execute on function public.get_notices() to authenticated;
 grant execute on function public.create_notice(text, text, text) to authenticated;
+grant execute on function public.update_notice(uuid, text, text, text, boolean) to authenticated;
+grant execute on function public.delete_notice(uuid) to authenticated;
 grant execute on function public.get_pass_transactions(uuid) to authenticated;
 grant execute on function public.adjust_member_pass(uuid, integer, text) to authenticated;
 grant execute on function public.update_member_pass_product(uuid, integer) to authenticated;

@@ -37,6 +37,7 @@ export interface ReservationPerson {
   createdAt: string;
   fixedLessonId?: string | null;
   lessonCapacity?: number | null;
+  durationMinutes?: number | null;
 }
 
 export interface FixedLesson {
@@ -48,7 +49,21 @@ export interface FixedLesson {
   startMinutes: number;
   timeLabel: string;
   instructor: string;
+  durationMinutes: number;
   lessonCapacity: number;
+}
+
+export interface InstructorLessonTime {
+  id: string;
+  instructor: string;
+  weekday: number;
+  weekdayLabel: string;
+  hour: number;
+  minute: number;
+  startMinutes: number;
+  timeLabel: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ClassSlot {
@@ -80,7 +95,7 @@ export interface ClassSlot {
 
 export type ReservationAction = 'substituteReserved' | 'substituteCanceled';
 
-export type AbsenceAction = 'absenceCreated' | 'absenceCanceled';
+export type AbsenceAction = 'absenceRequested' | 'absenceCanceled';
 
 export type LessonChangeRequestStatus = 'pending' | 'approved' | 'rejected' | 'canceled';
 
@@ -89,6 +104,10 @@ export type LessonAssignmentRequestType = 'extra_lesson' | 'free_swim';
 export type LessonFeedbackMediaType = 'image' | 'video';
 
 export type SpecialLessonRegistrationStatus = 'pending' | 'waitlisted' | 'approved' | 'rejected' | 'canceled';
+
+export type MemberRequestStatus = 'pending' | 'reviewing' | 'resolved' | 'rejected';
+
+export type StoreOrderStatus = 'pending' | 'confirmed' | 'canceled';
 
 export interface LessonChangeRequest {
   id: string;
@@ -100,6 +119,19 @@ export interface LessonChangeRequest {
   targetSlotId: string;
   targetStartsAt: string;
   targetInstructor: string;
+  status: LessonChangeRequestStatus;
+  createdAt: string;
+  reviewedAt: string | null;
+  reviewedByName: string | null;
+}
+
+export interface LessonAbsenceRequest {
+  id: string;
+  userId: string;
+  userName: string;
+  slotId: string;
+  startsAt: string;
+  instructor: string;
   status: LessonChangeRequestStatus;
   createdAt: string;
   reviewedAt: string | null;
@@ -118,6 +150,7 @@ export interface LessonAssignmentRequest {
   createdAt: string;
   reviewedAt: string | null;
   reviewedByName: string | null;
+  reviewComment: string;
 }
 
 export interface LessonFeedback {
@@ -187,6 +220,47 @@ export interface SpecialLessonRegistration {
   reviewedByName: string | null;
 }
 
+export interface MemberRequest {
+  id: string;
+  userId: string;
+  userName: string;
+  title: string;
+  body: string;
+  status: MemberRequestStatus;
+  adminReply: string;
+  createdAt: string;
+  reviewedAt: string | null;
+  reviewedByName: string | null;
+}
+
+export interface StoreProduct {
+  id: string;
+  name: string;
+  description: string;
+  imagePath: string | null;
+  imageUri?: string;
+  price: number;
+  stockQuantity: number;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface StoreOrder {
+  id: string;
+  productId: string;
+  productName: string;
+  userId: string;
+  userName: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+  status: StoreOrderStatus;
+  adminComment: string;
+  createdAt: string;
+  reviewedAt: string | null;
+  reviewedByName: string | null;
+}
+
 export interface MemberSummary {
   id: string;
   name: string;
@@ -222,6 +296,7 @@ export interface Notice {
   body: string;
   author: string;
   createdAt: string;
+  imagePath?: string;
   imageUri?: string;
 }
 

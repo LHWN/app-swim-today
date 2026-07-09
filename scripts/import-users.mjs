@@ -11,6 +11,30 @@ if (!supabaseUrl || !serviceRoleKey) {
   process.exit(1);
 }
 
+let parsedSupabaseUrl;
+
+try {
+  parsedSupabaseUrl = new URL(supabaseUrl);
+} catch {
+  console.error('SUPABASE_URL 형식이 올바르지 않습니다.');
+  console.error('예: https://kjgnqipuknsxlrwkxcik.supabase.co');
+  process.exit(1);
+}
+
+if (parsedSupabaseUrl.hostname === 'supabase.com' || parsedSupabaseUrl.hostname.endsWith('.supabase.com')) {
+  console.error('SUPABASE_URL에 Supabase Dashboard 주소가 들어가 있습니다.');
+  console.error('Project Settings > Data API 또는 API Settings의 Project URL을 넣어주세요.');
+  console.error('예: https://kjgnqipuknsxlrwkxcik.supabase.co');
+  process.exit(1);
+}
+
+if (!parsedSupabaseUrl.hostname.endsWith('.supabase.co')) {
+  console.error('SUPABASE_URL이 Supabase 프로젝트 API 주소처럼 보이지 않습니다.');
+  console.error(`현재 값: ${supabaseUrl}`);
+  console.error('예: https://kjgnqipuknsxlrwkxcik.supabase.co');
+  process.exit(1);
+}
+
 if (serviceRoleKey.startsWith('sb_publishable_')) {
   console.error('SUPABASE_SERVICE_ROLE_KEY에 publishable key가 들어가 있습니다. Auth Admin 회원 생성에는 사용할 수 없습니다.');
   console.error('Supabase Dashboard > Project Settings > API Keys > Legacy API Keys > service_role 값을 넣어주세요.');
@@ -57,6 +81,10 @@ for (const line of lines) {
 
   if (error) {
     console.error('실패:', row.email, error.message);
+    if (error.message.includes("Unexpected token '<'")) {
+      console.error('  Supabase API가 JSON 대신 HTML을 반환했습니다. SUPABASE_URL이 프로젝트 API URL인지 다시 확인해주세요.');
+      console.error('  올바른 예: https://kjgnqipuknsxlrwkxcik.supabase.co');
+    }
     continue;
   }
 

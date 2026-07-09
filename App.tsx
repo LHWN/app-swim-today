@@ -1,9 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import type { ScrollViewProps } from 'react-native';
 import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
   Linking,
+  Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
   Platform,
@@ -15,18 +18,22 @@ import {
   Switch,
   Text,
   TextInput,
+  useWindowDimensions,
   View
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Feather } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import * as ImagePicker from 'expo-image-picker';
-import { colors, shadows } from './src/theme';
+import { VideoView, useVideoPlayer } from 'expo-video';
+import { colors, radius, shadows, spacing, typography } from './src/theme';
 import {
+  addDays,
   CURRENT_SCHEDULE_VERSION,
   createInitialSlots,
   defaultPrefs,
   formatSlotHour,
+  getDateKey,
   getDateOptions,
   getTodayKey,
   initialNotices,
@@ -36,37 +43,59 @@ import {
   adjustMemberPass,
   applySpecialLesson,
   assignLessonReservation,
+  cancelLessonAbsenceRequest,
+  cancelInstructorLessonTime,
+  cancelStoreOrder,
   cancelLessonAssignmentRequest,
   cancelLessonChangeRequest,
   cancelFixedLesson,
+  cancelFixedLessonAttendance,
   cancelLessonReservation,
   cancelLessonSlot,
+  cancelMyLessonReservation,
   cancelSpecialLessonRegistration,
+  createMemberRequest,
   createSpecialLesson,
   createLessonAssignmentRequest,
   createLessonSlot,
   createLessonChangeRequest,
+  createStoreOrder,
+  createStoreProduct,
+  CreateMemberRequestInput,
   CreateSpecialLessonInput,
+  CreateStoreProductInput,
   DatabaseError,
   deleteAccount,
+  deleteNotice,
   getCurrentUser,
+  getLessonAbsenceRequests,
   getLessonAssignmentRequests,
   getLessonChangeRequests,
   getLessonFeedbacks,
   getLessonFeedbackTargets,
+  getInstructorLessonTimes,
+  getMemberRequests,
   getMemberById,
   getMemberSummaries,
   getMyFixedLessons,
   getNoticesFromDatabase,
+  getPastSlotsFromDatabase,
   getSpecialLessonRegistrations,
   getSpecialLessons,
+  getStoreOrders,
+  getStoreProducts,
   publishLessonFeedback,
   getSlotsFromDatabase,
   publishNotice,
   PublishLessonFeedbackInput,
   reviewLessonAssignmentRequest,
+  reviewLessonAbsenceRequest,
   reviewLessonChangeRequest,
+  reviewMemberRequest,
   reviewSpecialLessonRegistration,
+  reviewStoreOrder,
+  saveInstructorLessonTime,
+  SaveInstructorLessonTimeInput,
   signIn,
   signOut,
   signUp,
@@ -76,6 +105,10 @@ import {
   updateLessonSlotDetails,
   updateLessonSlotInstructor,
   updateMemberPassProduct,
+  updateNotice,
+  updateSpecialLesson,
+  UpdateNoticeInput,
+  UpdateSpecialLessonInput,
   upsertFixedLesson
 } from './src/database';
 import { sendLocalNotification } from './src/notifications';
@@ -84,12 +117,16 @@ import {
   AuthProvider,
   ClassSlot,
   FixedLesson,
+  LessonAbsenceRequest,
   LessonAssignmentRequest,
   LessonAssignmentRequestType,
   LessonChangeRequest,
   LessonFeedback,
   LessonFeedbackMediaType,
   LessonFeedbackTarget,
+  InstructorLessonTime,
+  MemberRequest,
+  MemberRequestStatus,
   MemberSummary,
   NotificationKey,
   NotificationPrefs,
@@ -98,6 +135,8 @@ import {
   SpecialLesson,
   SpecialLessonRegistration,
   SpecialLessonRegistrationStatus,
+  StoreOrder,
+  StoreProduct,
   TabId,
   User,
   UserRole,
@@ -110,8 +149,43 @@ const CONTACT_PHONE = '010-4698-3505';
 const PRIVACY_POLICY_URL = 'https://github.com/LHWN/app-swim-today/blob/main/docs/privacy-policy.md';
 const ACCOUNT_DELETION_URL = 'https://github.com/LHWN/app-swim-today/blob/main/docs/account-deletion.md';
 const DEFAULT_PASS_BALANCE = 12;
+const POOL_OPEN_HOUR = 5;
+const POOL_CLOSE_HOUR = 22;
+const REQUESTABLE_WINDOW_DAYS = 30;
+const REQUESTABLE_WINDOW_MS = REQUESTABLE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+const ADMIN_PAST_LESSON_DAYS = 14;
+const ADMIN_PAST_LESSON_WINDOW_MS = ADMIN_PAST_LESSON_DAYS * 24 * 60 * 60 * 1000;
+const TOOLTIP_HORIZONTAL_MARGIN = 16;
+const TOOLTIP_MAX_WIDTH = 280;
 const brandLogoImage = require('./logo.png');
 const logoOnNavyImage = require('./logo-on-navy.png');
+const keyboardAvoidingBehavior = Platform.OS === 'ios' ? 'padding' : undefined;
+const defaultKeyboardDismissMode = Platform.OS === 'ios' ? 'interactive' : 'on-drag';
+const isDevelopmentBuild = typeof __DEV__ === 'boolean' ? __DEV__ : false;
+const testAdminEmail = process.env.EXPO_PUBLIC_TEST_ADMIN_EMAIL?.trim() ?? '';
+const testAdminPassword = process.env.EXPO_PUBLIC_TEST_ADMIN_PASSWORD?.trim() ?? '';
+const testMemberEmail = process.env.EXPO_PUBLIC_TEST_MEMBER_EMAIL?.trim() ?? '';
+const testMemberPassword = process.env.EXPO_PUBLIC_TEST_MEMBER_PASSWORD?.trim() ?? '';
+const weekdayOptions = [
+  { value: 1, label: '월' },
+  { value: 2, label: '화' },
+  { value: 3, label: '수' },
+  { value: 4, label: '목' },
+  { value: 5, label: '금' },
+  { value: 6, label: '토' },
+  { value: 7, label: '일' }
+];
+const lessonTimeOptions = Array.from({ length: (POOL_CLOSE_HOUR - POOL_OPEN_HOUR) * 2 + 1 }, (_, index) => {
+  const totalMinutes = POOL_OPEN_HOUR * 60 + index * 30;
+  const hour = Math.floor(totalMinutes / 60);
+  const minute = totalMinutes % 60;
+
+  return {
+    value: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
+    hour,
+    minute
+  };
+});
 
 const FONT = {
   light: 'NanumSquareL',
@@ -150,6 +224,250 @@ const tabs: Array<{ id: TabId; label: string; icon: keyof typeof Feather.glyphMa
   { id: 'notices', label: '공지', icon: 'bell' },
   { id: 'profile', label: '내정보', icon: 'user' }
 ];
+
+type TestAccountId = 'admin' | 'member';
+
+interface TestAccount {
+  id: TestAccountId;
+  label: string;
+  email: string;
+  password: string;
+  icon: keyof typeof Feather.glyphMap;
+}
+
+const rawTestAccounts: TestAccount[] = [
+  {
+    id: 'admin',
+    label: '관리자',
+    email: testAdminEmail,
+    password: testAdminPassword,
+    icon: 'shield'
+  },
+  {
+    id: 'member',
+    label: '회원',
+    email: testMemberEmail,
+    password: testMemberPassword,
+    icon: 'user'
+  }
+];
+const configuredTestAccounts = isDevelopmentBuild
+  ? rawTestAccounts.filter((account) => account.email.length > 0 && account.password.length > 0)
+  : [];
+
+interface HomeMenuOption<T extends string> {
+  id: T;
+  label: string;
+  description?: string;
+  icon: keyof typeof Feather.glyphMap;
+  count?: number;
+}
+
+type MemberHomeSection = 'lessons' | 'requests' | 'special' | 'store' | 'feedback';
+type AdminHomeSection = 'requests' | 'members' | 'instructors' | 'content' | 'store';
+type MemberDetailView = 'pastLessons' | 'lessonRequests' | 'memberRequests' | 'storeOrders';
+type ProfileDetailView = 'basicInfo' | 'memberRequests';
+
+function isPastDate(value?: string | null) {
+  return Boolean(value && new Date(value).getTime() < Date.now());
+}
+
+function formatFixedLessonSummary(fixedLessons: FixedLesson[]) {
+  if (fixedLessons.length === 0) {
+    return '고정수업 미설정';
+  }
+
+  const visibleLessons = fixedLessons.slice(0, 2).map((lesson) => `${lesson.weekdayLabel} ${lesson.timeLabel}`);
+  const hiddenCount = fixedLessons.length - visibleLessons.length;
+
+  return hiddenCount > 0 ? `${visibleLessons.join(' · ')} 외 ${hiddenCount}개` : visibleLessons.join(' · ');
+}
+
+function KeyboardAwareScrollView({
+  children,
+  keyboardDismissMode,
+  keyboardShouldPersistTaps,
+  automaticallyAdjustKeyboardInsets,
+  ...props
+}: ScrollViewProps) {
+  return (
+    <ScrollView
+      keyboardDismissMode={keyboardDismissMode ?? defaultKeyboardDismissMode}
+      keyboardShouldPersistTaps={keyboardShouldPersistTaps ?? 'handled'}
+      automaticallyAdjustKeyboardInsets={automaticallyAdjustKeyboardInsets ?? Platform.OS === 'ios'}
+      {...props}
+    >
+      {children}
+    </ScrollView>
+  );
+}
+
+function WeekdaySelector({ value, onChange }: { value: number; onChange: (weekday: number) => void }) {
+  return (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.compactSelector}>
+      {weekdayOptions.map((option) => {
+        const selected = value === option.value;
+
+        return (
+          <Pressable
+            key={option.value}
+            style={[styles.selectorChip, selected && styles.selectorChipActive]}
+            onPress={() => onChange(option.value)}
+            accessibilityRole="button"
+          >
+            <Text style={[styles.selectorChipText, selected && styles.selectorChipTextActive]}>{option.label}</Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+function LessonTimeSelector({ value, onChange }: { value: string; onChange: (time: string) => void }) {
+  return (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.compactSelector}>
+      {lessonTimeOptions.map((option) => {
+        const selected = value === option.value;
+
+        return (
+          <Pressable
+            key={option.value}
+            style={[styles.timeSelectorChip, selected && styles.selectorChipActive]}
+            onPress={() => onChange(option.value)}
+            accessibilityRole="button"
+          >
+            <Text style={[styles.selectorChipText, selected && styles.selectorChipTextActive]}>{option.value}</Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+function DropdownSelect({
+  value,
+  options,
+  onChange,
+  placeholder = '선택'
+}: {
+  value: string;
+  options: Array<{ value: string; label: string; meta?: string }>;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find((option) => option.value === value);
+
+  return (
+    <View style={styles.dropdownWrap}>
+      <Pressable style={styles.dropdownButton} onPress={() => setOpen((current) => !current)} accessibilityRole="button">
+        <Text style={selected ? styles.dropdownButtonText : styles.dropdownPlaceholder}>{selected?.label ?? placeholder}</Text>
+        <Feather name={open ? 'chevron-up' : 'chevron-down'} size={17} color={colors.blue700} />
+      </Pressable>
+      {open ? (
+        <View style={styles.dropdownMenu}>
+          <ScrollView nestedScrollEnabled style={styles.dropdownMenuScroll}>
+            {options.map((option) => {
+              const active = option.value === value;
+
+              return (
+                <Pressable
+                  key={option.value}
+                  style={[styles.dropdownOption, active && styles.dropdownOptionActive]}
+                  onPress={() => {
+                    onChange(option.value);
+                    setOpen(false);
+                  }}
+                  accessibilityRole="button"
+                >
+                  <Text style={[styles.dropdownOptionText, active && styles.dropdownOptionTextActive]}>{option.label}</Text>
+                  {option.meta ? <Text style={[styles.dropdownOptionMeta, active && styles.dropdownOptionMetaActive]}>{option.meta}</Text> : null}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function DurationSelector({ value, onChange }: { value: number; onChange: (duration: number) => void }) {
+  return (
+    <View style={styles.lessonDurationSelector}>
+      {[30, 60].map((duration) => {
+        const selected = value === duration;
+
+        return (
+          <Pressable
+            key={duration}
+            style={[styles.lessonDurationButton, selected && styles.lessonDurationButtonActive]}
+            onPress={() => onChange(duration)}
+            accessibilityRole="button"
+          >
+            <Text style={[styles.lessonDurationButtonText, selected && styles.lessonDurationButtonTextActive]}>
+              {duration === 30 ? '30분' : '1시간'}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function MultiWeekdaySelector({ values, onChange }: { values: number[]; onChange: (weekdays: number[]) => void }) {
+  function toggle(value: number) {
+    const nextValues = values.includes(value) ? values.filter((item) => item !== value) : [...values, value].sort((a, b) => a - b);
+    onChange(nextValues.length > 0 ? nextValues : [value]);
+  }
+
+  return (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.compactSelector}>
+      {weekdayOptions.map((option) => {
+        const selected = values.includes(option.value);
+
+        return (
+          <Pressable
+            key={option.value}
+            style={[styles.selectorChip, selected && styles.selectorChipActive]}
+            onPress={() => toggle(option.value)}
+            accessibilityRole="button"
+          >
+            <Text style={[styles.selectorChipText, selected && styles.selectorChipTextActive]}>{option.label}</Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+function MultiLessonTimeSelector({ values, onChange }: { values: string[]; onChange: (times: string[]) => void }) {
+  function toggle(value: string) {
+    const nextValues = values.includes(value)
+      ? values.filter((item) => item !== value)
+      : [...values, value].sort((a, b) => a.localeCompare(b));
+    onChange(nextValues.length > 0 ? nextValues : [value]);
+  }
+
+  return (
+    <View style={styles.multiTimeGrid}>
+      {lessonTimeOptions.map((option) => {
+        const selected = values.includes(option.value);
+
+        return (
+          <Pressable
+            key={option.value}
+            style={[styles.multiTimeButton, selected && styles.selectorChipActive]}
+            onPress={() => toggle(option.value)}
+            accessibilityRole="button"
+          >
+            <Text style={[styles.selectorChipText, selected && styles.selectorChipTextActive]}>{option.value}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
 
 interface PersistedState {
   scheduleVersion?: number;
@@ -246,8 +564,12 @@ function isUnassignedOpenLesson(slot: ClassSlot) {
   return slot.isActive && !hasAnyAssignedMember(slot);
 }
 
+function isPoolOperatingSlot(slot: ClassSlot) {
+  return slot.hour >= POOL_OPEN_HOUR && slot.hour <= POOL_CLOSE_HOUR;
+}
+
 function isFreeSwimCandidateSlot(slot: ClassSlot) {
-  return !slot.isActive && !hasAnyAssignedMember(slot);
+  return isPoolOperatingSlot(slot) && !slot.isActive && !hasAnyAssignedMember(slot);
 }
 
 function isVisibleLessonSlot(slot: ClassSlot, user: User) {
@@ -258,7 +580,6 @@ function isVisibleLessonSlot(slot: ClassSlot, user: User) {
   return (
     isFixedLessonForUser(slot, user) ||
     isReservedByUser(slot, user) ||
-    hasAnyAssignedMember(slot) ||
     isUnassignedOpenLesson(slot) ||
     isFreeSwimCandidateSlot(slot)
   );
@@ -266,6 +587,30 @@ function isVisibleLessonSlot(slot: ClassSlot, user: User) {
 
 function isUpcomingSlot(slot: ClassSlot) {
   return new Date(slot.startsAt).getTime() >= Date.now();
+}
+
+function isWithinRequestableWindow(slot: ClassSlot) {
+  const startsAt = new Date(slot.startsAt).getTime();
+  const now = Date.now();
+
+  return startsAt >= now && startsAt <= now + REQUESTABLE_WINDOW_MS;
+}
+
+function isWithinAdminPastLessonWindow(slot: ClassSlot) {
+  const startsAt = new Date(slot.startsAt).getTime();
+  const now = Date.now();
+
+  return startsAt < now && startsAt >= now - ADMIN_PAST_LESSON_WINDOW_MS;
+}
+
+function getAdminLessonTabSlots(currentSlots: ClassSlot[], pastSlots: ClassSlot[]) {
+  const slotsById = new Map<string, ClassSlot>();
+
+  [...pastSlots.filter(isWithinAdminPastLessonWindow), ...currentSlots].forEach((slot) => {
+    slotsById.set(slot.id, slot);
+  });
+
+  return Array.from(slotsById.values()).sort(sortSlotsByStartsAt);
 }
 
 function formatLessonCapacity(capacity: number) {
@@ -308,6 +653,25 @@ function formatSlotBrief(startsAt?: string) {
   return `${date} ${formatSlotHour(startsAt)}`;
 }
 
+function getWeekStartKey(dateKey: string) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  const isoWeekday = date.getUTCDay() === 0 ? 7 : date.getUTCDay();
+  date.setUTCDate(date.getUTCDate() - (isoWeekday - 1));
+
+  return date.toISOString().slice(0, 10);
+}
+
+function formatDateKeyShort(dateKey: string) {
+  const [, month, day] = dateKey.split('-').map(Number);
+
+  return `${month}/${day}`;
+}
+
+function formatWeekRange(startDateKey: string) {
+  return `${formatDateKeyShort(startDateKey)}-${formatDateKeyShort(addDays(startDateKey, 6))}`;
+}
+
 function formatRequestStatus(status: LessonChangeRequest['status']) {
   if (status === 'approved') {
     return '승인';
@@ -328,8 +692,37 @@ function formatAssignmentRequestType(type: LessonAssignmentRequestType) {
   return type === 'free_swim' ? '자유수영' : '추가 수업';
 }
 
+function getFeedbackTargetKeyFor(slotId: string, userId: string) {
+  return `${slotId}:${userId}`;
+}
+
 function getFeedbackTargetKey(target?: LessonFeedbackTarget | null) {
-  return target ? `${target.slotId}:${target.userId}` : '';
+  return target ? getFeedbackTargetKeyFor(target.slotId, target.userId) : '';
+}
+
+function canWriteLessonFeedbackForPerson(slot: ClassSlot, person: ReservationPerson, target?: LessonFeedbackTarget | null) {
+  return Boolean(person.userId) && (Boolean(target) || (slot.isActive && isPastDate(slot.startsAt)));
+}
+
+function createLessonFeedbackTargetFromPerson(slot: ClassSlot, person: ReservationPerson, target?: LessonFeedbackTarget | null): LessonFeedbackTarget {
+  if (target) {
+    return target;
+  }
+
+  return {
+    slotId: slot.id,
+    startsAt: slot.startsAt,
+    instructor: slot.instructor,
+    durationMinutes: person.durationMinutes ?? slot.durationMinutes,
+    userId: person.userId,
+    userName: person.userName,
+    feedbackId: null,
+    feedbackText: null,
+    mediaPath: null,
+    mediaType: null,
+    feedbackCreatedAt: null,
+    feedbackUpdatedAt: null
+  };
 }
 
 function buildKoreaDateTimeIso(dateText: string, timeText: string) {
@@ -365,6 +758,38 @@ function formatSpecialLessonStatus(status?: SpecialLessonRegistrationStatus | nu
   }
 
   return '신청 가능';
+}
+
+function formatMemberRequestStatus(status: MemberRequestStatus) {
+  if (status === 'reviewing') {
+    return '처리중';
+  }
+
+  if (status === 'resolved') {
+    return '해결';
+  }
+
+  if (status === 'rejected') {
+    return '거절';
+  }
+
+  return '접수';
+}
+
+function formatStoreOrderStatus(status: StoreOrder['status']) {
+  if (status === 'confirmed') {
+    return '구매확정';
+  }
+
+  if (status === 'canceled') {
+    return '취소';
+  }
+
+  return '승인대기';
+}
+
+function formatWon(amount: number) {
+  return `${amount.toLocaleString('ko-KR')}원`;
 }
 
 async function openFeedbackMedia(uri: string) {
@@ -424,14 +849,15 @@ async function notifyAssignmentRequestChanges(
 
   const requestLabel = formatAssignmentRequestType(completedRequest.requestType);
   const slotLabel = formatSlotBrief(completedRequest.startsAt);
+  const commentSuffix = completedRequest.reviewComment ? ` · ${completedRequest.reviewComment}` : '';
 
   if (completedRequest.status === 'approved') {
-    await sendLocalNotification('배정 완료', `${slotLabel} ${requestLabel} 신청이 승인되었습니다.`);
+    await sendLocalNotification('배정 완료', `${slotLabel} ${requestLabel} 신청이 승인되었습니다.${commentSuffix}`);
     return;
   }
 
   if (completedRequest.status === 'rejected') {
-    await sendLocalNotification('신청 거절', `${slotLabel} ${requestLabel} 신청이 거절되었습니다.`);
+    await sendLocalNotification('신청 거절', `${slotLabel} ${requestLabel} 신청이 거절되었습니다.${commentSuffix}`);
   }
 }
 
@@ -478,17 +904,23 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('home');
   const [selectedDate, setSelectedDate] = useState(getTodayKey());
   const [slots, setSlots] = useState<ClassSlot[]>(createInitialSlots);
+  const [pastSlots, setPastSlots] = useState<ClassSlot[]>([]);
   const [notices, setNotices] = useState<Notice[]>(initialNotices);
   const [prefs, setPrefs] = useState<NotificationPrefs>(defaultPrefs);
   const [passBalance, setPassBalance] = useState(DEFAULT_PASS_BALANCE);
   const [members, setMembers] = useState<MemberSummary[]>([]);
   const [fixedLessons, setFixedLessons] = useState<FixedLesson[]>([]);
   const [changeRequests, setChangeRequests] = useState<LessonChangeRequest[]>([]);
+  const [absenceRequests, setAbsenceRequests] = useState<LessonAbsenceRequest[]>([]);
   const [assignmentRequests, setAssignmentRequests] = useState<LessonAssignmentRequest[]>([]);
   const [lessonFeedbacks, setLessonFeedbacks] = useState<LessonFeedback[]>([]);
   const [lessonFeedbackTargets, setLessonFeedbackTargets] = useState<LessonFeedbackTarget[]>([]);
+  const [instructorLessonTimes, setInstructorLessonTimes] = useState<InstructorLessonTime[]>([]);
   const [specialLessons, setSpecialLessons] = useState<SpecialLesson[]>([]);
   const [specialLessonRegistrations, setSpecialLessonRegistrations] = useState<SpecialLessonRegistration[]>([]);
+  const [memberRequests, setMemberRequests] = useState<MemberRequest[]>([]);
+  const [storeProducts, setStoreProducts] = useState<StoreProduct[]>([]);
+  const [storeOrders, setStoreOrders] = useState<StoreOrder[]>([]);
   const assignmentRequestsRef = useRef<LessonAssignmentRequest[]>([]);
   const lessonFeedbacksRef = useRef<LessonFeedback[]>([]);
   const pollingRefreshRef = useRef(false);
@@ -510,35 +942,53 @@ export default function App() {
           setUser(savedUser);
           const [
             nextSlots,
+            nextPastSlots,
             nextNotices,
             nextFixedLessons,
             nextChangeRequests,
+            nextAbsenceRequests,
             nextAssignmentRequests,
             nextFeedbacks,
             nextFeedbackTargets,
+            nextInstructorLessonTimes,
             nextSpecialLessons,
-            nextSpecialLessonRegistrations
+            nextSpecialLessonRegistrations,
+            nextMemberRequests,
+            nextStoreProducts,
+            nextStoreOrders
           ] = await Promise.all([
             getSlotsFromDatabase(),
+            getPastSlotsFromDatabase(),
             getNoticesFromDatabase(),
             savedUser.role === 'member' ? getMyFixedLessons() : Promise.resolve([]),
             getLessonChangeRequests(),
+            getLessonAbsenceRequests(),
             getLessonAssignmentRequests(),
             getLessonFeedbacks(),
             savedUser.role === 'admin' ? getLessonFeedbackTargets() : Promise.resolve([]),
+            savedUser.role === 'admin' ? getInstructorLessonTimes() : Promise.resolve([]),
             getSpecialLessons(),
-            getSpecialLessonRegistrations()
+            getSpecialLessonRegistrations(),
+            getMemberRequests(),
+            getStoreProducts(),
+            getStoreOrders()
           ]);
           setSlots(nextSlots);
+          setPastSlots(nextPastSlots);
           setNotices(nextNotices.length > 0 ? nextNotices : initialNotices);
           setFixedLessons(nextFixedLessons);
           setChangeRequests(nextChangeRequests);
+          setAbsenceRequests(nextAbsenceRequests);
           setAssignmentRequests(nextAssignmentRequests);
           setLessonFeedbacks(nextFeedbacks);
           lessonFeedbacksRef.current = nextFeedbacks;
           setLessonFeedbackTargets(nextFeedbackTargets);
+          setInstructorLessonTimes(nextInstructorLessonTimes);
           setSpecialLessons(nextSpecialLessons);
           setSpecialLessonRegistrations(nextSpecialLessonRegistrations);
+          setMemberRequests(nextMemberRequests);
+          setStoreProducts(nextStoreProducts);
+          setStoreOrders(nextStoreOrders);
           setPassBalance(savedUser.passBalance);
           setMembers(savedUser.role === 'admin' ? await getMemberSummaries() : []);
         }
@@ -620,43 +1070,61 @@ export default function App() {
     const previousLessonFeedbacks = lessonFeedbacksRef.current;
     const [
       nextSlots,
+      nextPastSlots,
       latestUser,
       nextNotices,
       nextFixedLessons,
       nextChangeRequests,
+      nextAbsenceRequests,
       nextAssignmentRequests,
       nextFeedbacks,
       nextFeedbackTargets,
+      nextInstructorLessonTimes,
       nextSpecialLessons,
-      nextSpecialLessonRegistrations
+      nextSpecialLessonRegistrations,
+      nextMemberRequests,
+      nextStoreProducts,
+      nextStoreOrders
     ] = await Promise.all([
       getSlotsFromDatabase(),
+      getPastSlotsFromDatabase(),
       getMemberById(nextUser.id),
       getNoticesFromDatabase(),
       nextUser.role === 'member' ? getMyFixedLessons() : Promise.resolve([]),
       getLessonChangeRequests(),
+      getLessonAbsenceRequests(),
       getLessonAssignmentRequests(),
       getLessonFeedbacks(),
       nextUser.role === 'admin' ? getLessonFeedbackTargets() : Promise.resolve([]),
+      nextUser.role === 'admin' ? getInstructorLessonTimes() : Promise.resolve([]),
       getSpecialLessons(),
-      getSpecialLessonRegistrations()
+      getSpecialLessonRegistrations(),
+      getMemberRequests(),
+      getStoreProducts(),
+      getStoreOrders()
     ]);
     const normalizedUser = latestUser ?? nextUser;
 
     setSlots(nextSlots);
+    setPastSlots(nextPastSlots);
     if (resetSelectedDate) {
       setSelectedDate(nextSlots[0]?.date ?? getTodayKey());
     }
     setNotices(nextNotices.length > 0 ? nextNotices : initialNotices);
     setFixedLessons(nextFixedLessons);
     setChangeRequests(nextChangeRequests);
+    setAbsenceRequests(nextAbsenceRequests);
     setAssignmentRequests(nextAssignmentRequests);
     assignmentRequestsRef.current = nextAssignmentRequests;
     setLessonFeedbacks(nextFeedbacks);
     lessonFeedbacksRef.current = nextFeedbacks;
     setLessonFeedbackTargets(nextFeedbackTargets);
+    setInstructorLessonTimes(nextInstructorLessonTimes);
     setSpecialLessons(nextSpecialLessons);
     setSpecialLessonRegistrations(nextSpecialLessonRegistrations);
+    setMemberRequests(nextMemberRequests);
+    setStoreProducts(nextStoreProducts);
+    setStoreOrders(nextStoreOrders);
     setUser(normalizedUser);
     setPassBalance(normalizedUser.passBalance);
     setMembers(normalizedUser.role === 'admin' ? await getMemberSummaries() : []);
@@ -679,6 +1147,13 @@ export default function App() {
     await completeAuth(nextUser);
   }
 
+  async function handleSwitchTestAccount(account: TestAccount) {
+    await signOut();
+    resetSessionState();
+    const nextUser = await signIn(account.email, account.password);
+    await completeAuth(nextUser);
+  }
+
   async function handleSignUp(input: SignUpInput) {
     const nextUser = await signUp(input);
 
@@ -696,6 +1171,7 @@ export default function App() {
     setSlots(update.slots);
     setUser(update.user);
     setPassBalance(update.user.passBalance);
+    setAbsenceRequests(update.requests);
 
     return update.action;
   }
@@ -711,11 +1187,12 @@ export default function App() {
     weekday: number,
     hour: number,
     minute: number,
+    durationMinutes: number,
     fixedLessonId?: string | null
   ) {
     const result = fixedLessonId
-      ? await updateFixedLesson(fixedLessonId, weekday, hour, minute)
-      : await upsertFixedLesson(memberId, weekday, hour, minute);
+      ? await updateFixedLesson(fixedLessonId, weekday, hour, minute, durationMinutes)
+      : await upsertFixedLesson(memberId, weekday, hour, minute, durationMinutes);
     setMembers(result.members);
     setSlots(result.slots);
   }
@@ -731,8 +1208,28 @@ export default function App() {
     setSlots(result.slots);
   }
 
+  async function handleCancelFixedLessonAttendance(slotId: string, fixedLessonId: string) {
+    const result = await cancelFixedLessonAttendance(slotId, fixedLessonId);
+    setMembers(result.members);
+    setSlots(result.slots);
+  }
+
   async function handleUpdateLessonInstructor(slotId: string, instructor: string) {
     const result = await updateLessonSlotInstructor(slotId, instructor);
+    setMembers(result.members);
+    setSlots(result.slots);
+  }
+
+  async function handleSaveInstructorLessonTime(input: SaveInstructorLessonTimeInput) {
+    const result = await saveInstructorLessonTime(input);
+    setInstructorLessonTimes(result.instructorLessonTimes);
+    setMembers(result.members);
+    setSlots(result.slots);
+  }
+
+  async function handleCancelInstructorLessonTime(timeId: string) {
+    const result = await cancelInstructorLessonTime(timeId);
+    setInstructorLessonTimes(result.instructorLessonTimes);
     setMembers(result.members);
     setSlots(result.slots);
   }
@@ -749,8 +1246,8 @@ export default function App() {
     setSlots(result.slots);
   }
 
-  async function handleAssignLessonReservation(slotId: string, memberId: string) {
-    const result = await assignLessonReservation(slotId, memberId);
+  async function handleAssignLessonReservation(slotId: string, memberId: string, durationMinutes: number) {
+    const result = await assignLessonReservation(slotId, memberId, durationMinutes);
     setMembers(result.members);
     setSlots(result.slots);
   }
@@ -767,8 +1264,8 @@ export default function App() {
     setSlots(result.slots);
   }
 
-  async function handleCreateChangeRequest(targetSlotId: string) {
-    const nextRequests = await createLessonChangeRequest(targetSlotId);
+  async function handleCreateChangeRequest(sourceSlotId: string, targetSlotId: string) {
+    const nextRequests = await createLessonChangeRequest(sourceSlotId, targetSlotId);
     setChangeRequests(nextRequests);
   }
 
@@ -784,6 +1281,18 @@ export default function App() {
     setChangeRequests(result.requests);
   }
 
+  async function handleCancelAbsenceRequest(requestId: string) {
+    const nextRequests = await cancelLessonAbsenceRequest(requestId);
+    setAbsenceRequests(nextRequests);
+  }
+
+  async function handleReviewAbsenceRequest(requestId: string, approved: boolean) {
+    const result = await reviewLessonAbsenceRequest(requestId, approved);
+    setMembers(result.members);
+    setSlots(result.slots);
+    setAbsenceRequests(result.requests);
+  }
+
   async function handleCreateAssignmentRequest(slotId: string, requestType: LessonAssignmentRequestType) {
     const nextRequests = await createLessonAssignmentRequest(slotId, requestType);
     setAssignmentRequests(nextRequests);
@@ -794,8 +1303,20 @@ export default function App() {
     setAssignmentRequests(nextRequests);
   }
 
-  async function handleReviewAssignmentRequest(requestId: string, approved: boolean) {
-    const result = await reviewLessonAssignmentRequest(requestId, approved);
+  async function handleCancelMyLessonReservation(slotId: string) {
+    if (!user) {
+      throw new DatabaseError('INVALID_CREDENTIALS', '로그인이 필요합니다.');
+    }
+
+    const result = await cancelMyLessonReservation(slotId, user.id);
+    setSlots(result.slots);
+    setUser(result.user);
+    setPassBalance(result.user.passBalance);
+    setAssignmentRequests(result.assignmentRequests);
+  }
+
+  async function handleReviewAssignmentRequest(requestId: string, approved: boolean, comment = '') {
+    const result = await reviewLessonAssignmentRequest(requestId, approved, comment);
     setMembers(result.members);
     setSlots(result.slots);
     setAssignmentRequests(result.requests);
@@ -823,6 +1344,12 @@ export default function App() {
     setSpecialLessonRegistrations(result.registrations);
   }
 
+  async function handleUpdateSpecialLesson(input: UpdateSpecialLessonInput) {
+    const result = await updateSpecialLesson(input);
+    setSpecialLessons(result.specialLessons);
+    setSpecialLessonRegistrations(result.registrations);
+  }
+
   async function handleApplySpecialLesson(specialLessonId: string) {
     const result = await applySpecialLesson(specialLessonId);
     setSpecialLessons(result.specialLessons);
@@ -843,25 +1370,74 @@ export default function App() {
     setSpecialLessonRegistrations(result.registrations);
   }
 
+  async function handleCreateMemberRequest(input: CreateMemberRequestInput) {
+    const nextRequests = await createMemberRequest(input);
+    setMemberRequests(nextRequests);
+  }
+
+  async function handleReviewMemberRequest(requestId: string, status: MemberRequestStatus, reply = '') {
+    const nextRequests = await reviewMemberRequest(requestId, status, reply);
+    setMemberRequests(nextRequests);
+  }
+
+  async function handleCreateStoreProduct(input: CreateStoreProductInput) {
+    const nextProducts = await createStoreProduct(input);
+    setStoreProducts(nextProducts);
+  }
+
+  async function handleCreateStoreOrder(productId: string, quantity: number) {
+    const result = await createStoreOrder(productId, quantity);
+    setStoreProducts(result.products);
+    setStoreOrders(result.orders);
+  }
+
+  async function handleCancelStoreOrder(orderId: string) {
+    const result = await cancelStoreOrder(orderId);
+    setStoreProducts(result.products);
+    setStoreOrders(result.orders);
+  }
+
+  async function handleReviewStoreOrder(orderId: string, approved: boolean, comment = '') {
+    const result = await reviewStoreOrder(orderId, approved, comment);
+    setStoreProducts(result.products);
+    setStoreOrders(result.orders);
+  }
+
   async function handlePublishNotice(title: string, body: string, imageUri?: string) {
     const nextNotices = await publishNotice({ title, body, imageUri });
     setNotices(nextNotices.length > 0 ? nextNotices : initialNotices);
   }
 
+  async function handleUpdateNotice(input: UpdateNoticeInput) {
+    const nextNotices = await updateNotice(input);
+    setNotices(nextNotices.length > 0 ? nextNotices : initialNotices);
+  }
+
+  async function handleDeleteNotice(noticeId: string) {
+    const nextNotices = await deleteNotice(noticeId);
+    setNotices(nextNotices);
+  }
+
   function resetSessionState() {
     setUser(null);
     setSlots(createInitialSlots());
+    setPastSlots([]);
     setSelectedDate(getTodayKey());
     setPassBalance(DEFAULT_PASS_BALANCE);
     setMembers([]);
     setFixedLessons([]);
     setChangeRequests([]);
+    setAbsenceRequests([]);
     setAssignmentRequests([]);
     setLessonFeedbacks([]);
     lessonFeedbacksRef.current = [];
     setLessonFeedbackTargets([]);
+    setInstructorLessonTimes([]);
     setSpecialLessons([]);
     setSpecialLessonRegistrations([]);
+    setMemberRequests([]);
+    setStoreProducts([]);
+    setStoreOrders([]);
     setActiveTab('home');
   }
 
@@ -898,18 +1474,38 @@ export default function App() {
     () => slots.filter((slot) => isReservedByUser(slot, user)).sort(sortSlotsByStartsAt),
     [slots, user]
   );
+  const myPastReservations = useMemo(
+    () => pastSlots.filter((slot) => isReservedByUser(slot, user)).sort(sortSlotsByStartsAt),
+    [pastSlots, user]
+  );
 
   const myFixedSlots = useMemo(
     () => slots.filter((slot) => isFixedLessonForUser(slot, user)).sort(sortSlotsByStartsAt),
     [slots, user]
   );
-  const assignedFixedSlots = useMemo(
-    () => myFixedSlots.filter((slot) => !isAbsentByUser(slot, user) && isUpcomingSlot(slot)),
+  const myPastFixedSlots = useMemo(
+    () => pastSlots.filter((slot) => isFixedLessonForUser(slot, user)).sort(sortSlotsByStartsAt),
+    [pastSlots, user]
+  );
+  const myAttendingFixedSlots = useMemo(
+    () => myFixedSlots.filter((slot) => !isAbsentByUser(slot, user)),
     [myFixedSlots, user]
   );
-  const nextFixedClass = useMemo(
-    () => assignedFixedSlots[0],
-    [assignedFixedSlots]
+  const myAttendingPastFixedSlots = useMemo(
+    () => myPastFixedSlots.filter((slot) => !isAbsentByUser(slot, user)),
+    [myPastFixedSlots, user]
+  );
+  const myLessonFixedSlots = useMemo(
+    () => [...myAttendingPastFixedSlots, ...myAttendingFixedSlots].sort(sortSlotsByStartsAt),
+    [myAttendingPastFixedSlots, myAttendingFixedSlots]
+  );
+  const myLessonReservations = useMemo(
+    () => [...myPastReservations, ...myReservations].sort(sortSlotsByStartsAt),
+    [myPastReservations, myReservations]
+  );
+  const assignedFixedSlots = useMemo(
+    () => myAttendingFixedSlots.filter(isUpcomingSlot),
+    [myAttendingFixedSlots]
   );
   const myUpcomingLessons = useMemo(
     () => [...assignedFixedSlots, ...myReservations.filter(isUpcomingSlot)].sort(sortSlotsByStartsAt),
@@ -921,120 +1517,169 @@ export default function App() {
     () => slots.filter((slot) => slot.absences.length > 0 || slot.substitutes.length > 0).sort(sortSlotsByStartsAt),
     [slots]
   );
-  const dateOptions = useMemo(() => getDateOptions(slots), [slots]);
+  const reserveSlots = useMemo(
+    () => (user?.role === 'admin' ? getAdminLessonTabSlots(slots, pastSlots) : slots),
+    [pastSlots, slots, user?.role]
+  );
+  const dateOptions = useMemo(() => getDateOptions(reserveSlots), [reserveSlots]);
 
   if (showLaunchScreen || !hydrated || !fontsLoaded) {
     return <LaunchScreen />;
   }
 
   if (!user) {
-    return <LoginScreen onSignIn={handleSignIn} onSignUp={handleSignUp} />;
+    return <LoginScreen onSignIn={handleSignIn} onSignUp={handleSignUp} testAccounts={configuredTestAccounts} />;
   }
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" />
-      <View style={styles.appShell}>
-        <View style={styles.header}>
-          <View style={styles.headerBrand}>
-            <Image source={logoOnNavyImage} style={styles.headerLogoImage} resizeMode="contain" />
-            <View style={styles.headerTextBlock}>
-              <Text style={styles.headerTitle}>{user.name}님</Text>
+      <KeyboardAvoidingView style={styles.keyboardAvoidingView} behavior={keyboardAvoidingBehavior}>
+        <View style={styles.appShell}>
+          <View style={styles.header}>
+            <View style={styles.headerBrand}>
+              <Image source={logoOnNavyImage} style={styles.headerLogoImage} resizeMode="contain" />
+              <View style={styles.headerTextBlock}>
+                <Text style={styles.headerTitle}>{user.name}님</Text>
+              </View>
             </View>
+            {user.role === 'admin' ? null : (
+              <Pressable style={styles.contactButton} onPress={callContact} accessibilityLabel="문의 전화" accessibilityRole="button">
+                <Feather name="phone-call" size={15} color={colors.white} />
+                <Text style={styles.contactButtonText}>전화 문의</Text>
+              </Pressable>
+            )}
           </View>
-          <Pressable style={styles.contactButton} onPress={callContact} accessibilityLabel="문의 전화" accessibilityRole="button">
-            <Text style={styles.contactButtonText}>문의</Text>
-          </Pressable>
-        </View>
 
-        <View style={styles.content}>
-          {activeTab === 'home' ? (
-            <HomeScreen
-              userRole={user.role}
-              nextClass={nextClass}
-              nextFixedClass={nextFixedClass}
-              notices={notices}
-              fixedLessons={fixedLessons}
-              openSlots={openSlots}
-              slots={slots}
-              members={members}
-              changeRequests={changeRequests}
-              assignmentRequests={assignmentRequests}
-              lessonFeedbacks={lessonFeedbacks}
-              lessonFeedbackTargets={lessonFeedbackTargets}
-              specialLessons={specialLessons}
-              specialLessonRegistrations={specialLessonRegistrations}
-              passBalance={passBalance}
-              onAdjustMemberPass={handleAdjustMemberPass}
-              onUpdateMemberPassProduct={handleUpdateMemberPassProduct}
-              onSaveFixedLesson={handleSaveFixedLesson}
-              onCancelFixedLesson={handleCancelFixedLesson}
-              onUpdateLessonInstructor={handleUpdateLessonInstructor}
-              onCreateLessonSlot={handleCreateLessonSlot}
-              onUpdateLessonSlot={handleUpdateLessonSlot}
-              onAssignLessonReservation={handleAssignLessonReservation}
-              onCancelLessonReservation={handleCancelLessonReservation}
-              onCancelLessonSlot={handleCancelLessonSlot}
-              onCreateChangeRequest={handleCreateChangeRequest}
-              onCancelChangeRequest={handleCancelChangeRequest}
-              onReviewChangeRequest={handleReviewChangeRequest}
-              onCancelAssignmentRequest={handleCancelAssignmentRequest}
-              onReviewAssignmentRequest={handleReviewAssignmentRequest}
-              onPublishLessonFeedback={handlePublishLessonFeedback}
-              onCreateSpecialLesson={handleCreateSpecialLesson}
-              onApplySpecialLesson={handleApplySpecialLesson}
-              onCancelSpecialLessonRegistration={handleCancelSpecialLessonRegistration}
-              onReviewSpecialLessonRegistration={handleReviewSpecialLessonRegistration}
-              onReservePress={() => setActiveTab('reserve')}
-              onNoticePress={() => setActiveTab('notices')}
-            />
-          ) : null}
+          <View style={styles.content}>
+            {activeTab === 'home' ? (
+              <HomeScreen
+                userRole={user.role}
+                nextClass={nextClass}
+                notices={notices}
+                fixedLessons={fixedLessons}
+                myFixedLessonSlots={myLessonFixedSlots}
+                myReservations={myLessonReservations}
+                openSlots={openSlots}
+                slots={slots}
+                members={members}
+                changeRequests={changeRequests}
+                absenceRequests={absenceRequests}
+                assignmentRequests={assignmentRequests}
+                lessonFeedbackTargets={lessonFeedbackTargets}
+                lessonFeedbacks={lessonFeedbacks}
+                instructorLessonTimes={instructorLessonTimes}
+                specialLessons={specialLessons}
+                specialLessonRegistrations={specialLessonRegistrations}
+                memberRequests={memberRequests}
+                storeProducts={storeProducts}
+                storeOrders={storeOrders}
+                passBalance={passBalance}
+                onAdjustMemberPass={handleAdjustMemberPass}
+                onUpdateMemberPassProduct={handleUpdateMemberPassProduct}
+                onSaveFixedLesson={handleSaveFixedLesson}
+                onCancelFixedLesson={handleCancelFixedLesson}
+                onUpdateLessonInstructor={handleUpdateLessonInstructor}
+                onCreateLessonSlot={handleCreateLessonSlot}
+                onUpdateLessonSlot={handleUpdateLessonSlot}
+                onAssignLessonReservation={handleAssignLessonReservation}
+                onCancelLessonReservation={handleCancelLessonReservation}
+                onCancelLessonSlot={handleCancelLessonSlot}
+                onSaveInstructorLessonTime={handleSaveInstructorLessonTime}
+                onCancelInstructorLessonTime={handleCancelInstructorLessonTime}
+                onCancelChangeRequest={handleCancelChangeRequest}
+                onReviewChangeRequest={handleReviewChangeRequest}
+                onCancelAbsenceRequest={handleCancelAbsenceRequest}
+                onReviewAbsenceRequest={handleReviewAbsenceRequest}
+                onCancelAssignmentRequest={handleCancelAssignmentRequest}
+                onReviewAssignmentRequest={handleReviewAssignmentRequest}
+                onPublishLessonFeedback={handlePublishLessonFeedback}
+                onCreateSpecialLesson={handleCreateSpecialLesson}
+                onUpdateSpecialLesson={handleUpdateSpecialLesson}
+                onApplySpecialLesson={handleApplySpecialLesson}
+                onCancelSpecialLessonRegistration={handleCancelSpecialLessonRegistration}
+                onReviewSpecialLessonRegistration={handleReviewSpecialLessonRegistration}
+                onCreateMemberRequest={handleCreateMemberRequest}
+                onReviewMemberRequest={handleReviewMemberRequest}
+                onCreateStoreProduct={handleCreateStoreProduct}
+                onCreateStoreOrder={handleCreateStoreOrder}
+                onCancelStoreOrder={handleCancelStoreOrder}
+                onReviewStoreOrder={handleReviewStoreOrder}
+                onReservePress={() => setActiveTab('reserve')}
+                onNoticePress={() => setActiveTab('notices')}
+              />
+            ) : null}
 
-          {activeTab === 'reserve' ? (
-            <ReserveScreen
-              selectedDate={selectedDate}
-              setSelectedDate={setSelectedDate}
-              dateOptions={dateOptions}
-              user={user}
-              slots={slots}
-              passBalance={passBalance}
-              prefs={prefs}
-              assignmentRequests={assignmentRequests}
-              onAbsence={handleAbsenceChange}
-              onCreateAssignmentRequest={handleCreateAssignmentRequest}
-              onCancelAssignmentRequest={handleCancelAssignmentRequest}
-            />
-          ) : null}
+            {activeTab === 'reserve' ? (
+              <ReserveScreen
+                selectedDate={selectedDate}
+                setSelectedDate={setSelectedDate}
+                dateOptions={dateOptions}
+                user={user}
+                slots={reserveSlots}
+                members={members}
+                passBalance={passBalance}
+                prefs={prefs}
+                changeRequests={changeRequests}
+                absenceRequests={absenceRequests}
+                assignmentRequests={assignmentRequests}
+                lessonFeedbackTargets={lessonFeedbackTargets}
+                onAbsence={handleAbsenceChange}
+                onCancelAbsenceRequest={handleCancelAbsenceRequest}
+                onCreateAssignmentRequest={handleCreateAssignmentRequest}
+                onCancelAssignmentRequest={handleCancelAssignmentRequest}
+                onCancelMyLessonReservation={handleCancelMyLessonReservation}
+                onCreateLessonSlot={handleCreateLessonSlot}
+                onUpdateLessonSlot={handleUpdateLessonSlot}
+                onAssignLessonReservation={handleAssignLessonReservation}
+                onCancelLessonReservation={handleCancelLessonReservation}
+                onCancelLessonSlot={handleCancelLessonSlot}
+                onCancelFixedLessonAttendance={handleCancelFixedLessonAttendance}
+                onPublishLessonFeedback={handlePublishLessonFeedback}
+              />
+            ) : null}
 
-          {activeTab === 'notices' ? (
-            <NoticesScreen userRole={user.role} notices={notices} onPublishNotice={handlePublishNotice} prefs={prefs} />
-          ) : null}
+            {activeTab === 'notices' ? (
+              <NoticesScreen
+                userRole={user.role}
+                notices={notices}
+                onPublishNotice={handlePublishNotice}
+                onUpdateNotice={handleUpdateNotice}
+                onDeleteNotice={handleDeleteNotice}
+                prefs={prefs}
+              />
+            ) : null}
 
-          {activeTab === 'alerts' ? <AlertsScreen prefs={prefs} setPrefs={setPrefs} /> : null}
+            {activeTab === 'alerts' ? <AlertsScreen prefs={prefs} setPrefs={setPrefs} /> : null}
 
-          {activeTab === 'profile' ? (
-            <ProfileScreen
-              user={user}
-              reservationCount={user.role === 'admin' ? reservedSlots.length : myReservations.length}
-              passBalance={passBalance}
+            {activeTab === 'profile' ? (
+              <ProfileScreen
+                user={user}
+                reservationCount={user.role === 'admin' ? reservedSlots.length : myReservations.length}
+                passBalance={passBalance}
+                memberRequests={memberRequests}
+                onCreateMemberRequest={handleCreateMemberRequest}
               onLogout={handleLogout}
               onDeleteAccount={handleDeleteAccount}
+              testAccounts={configuredTestAccounts}
+              onSwitchTestAccount={handleSwitchTestAccount}
             />
           ) : null}
-        </View>
+          </View>
 
-        <View style={styles.tabBar}>
-          {tabs.map((tab) => {
-            const selected = activeTab === tab.id;
-            return (
-              <Pressable key={tab.id} style={[styles.tabItem, selected && styles.tabItemActive]} onPress={() => setActiveTab(tab.id)}>
-                <Feather name={tab.icon} size={20} color={selected ? colors.white : colors.blue700} />
-                <Text style={[styles.tabLabel, selected && styles.tabLabelActive]}>{tab.label}</Text>
-              </Pressable>
-            );
-          })}
+          <View style={styles.tabBar}>
+            {tabs.map((tab) => {
+              const selected = activeTab === tab.id;
+              return (
+                <Pressable key={tab.id} style={[styles.tabItem, selected && styles.tabItemActive]} onPress={() => setActiveTab(tab.id)}>
+                  <Feather name={tab.icon} size={20} color={selected ? colors.blue900 : colors.muted} />
+                  <Text style={[styles.tabLabel, selected && styles.tabLabelActive]}>{tab.label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -1050,10 +1695,12 @@ function LaunchScreen() {
 
 function LoginScreen({
   onSignIn,
-  onSignUp
+  onSignUp,
+  testAccounts
 }: {
   onSignIn: (email: string, password: string) => Promise<void>;
   onSignUp: (input: SignUpInput) => Promise<void>;
+  testAccounts: TestAccount[];
 }) {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [displayName, setDisplayName] = useState('');
@@ -1062,6 +1709,29 @@ function LoginScreen({
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  async function signInWithCredentials(nextEmail: string, nextPassword: string) {
+    await onSignIn(nextEmail, nextPassword);
+  }
+
+  async function quickSignIn(account: TestAccount) {
+    if (submitting) {
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      setMode('signin');
+      setEmail(account.email);
+      setPassword(account.password);
+      await signInWithCredentials(account.email, account.password);
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '잠시 후 다시 시도해주세요.';
+      Alert.alert('로그인 실패', message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function submit() {
     if (submitting) {
       return;
@@ -1069,9 +1739,8 @@ function LoginScreen({
 
     try {
       setSubmitting(true);
-
       if (mode === 'signin') {
-        await onSignIn(email, password);
+        await signInWithCredentials(email, password);
         return;
       }
 
@@ -1094,100 +1763,123 @@ function LoginScreen({
   return (
     <SafeAreaView style={styles.loginSafeArea}>
       <StatusBar barStyle="light-content" />
-      <ScrollView contentContainerStyle={styles.loginScrollContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-        <View style={styles.loginHero}>
-          <Image source={logoOnNavyImage} style={styles.loginHeroImage} resizeMode="contain" />
-          {/* <Text style={styles.loginTitle}>오늘도수영</Text> */}
-          <View style={styles.loginIconRow}>
-            <View style={styles.loginIconChip}>
-              <Feather name="calendar" size={18} color={colors.blue900} />
-            </View>
-            <View style={styles.loginIconChip}>
-              <Feather name="bell" size={18} color={colors.blue900} />
-            </View>
-            <View style={styles.loginIconChip}>
-              <Feather name="credit-card" size={18} color={colors.blue900} />
+      <KeyboardAvoidingView style={styles.keyboardAvoidingView} behavior={keyboardAvoidingBehavior}>
+        <KeyboardAwareScrollView contentContainerStyle={styles.loginScrollContent} showsVerticalScrollIndicator={false}>
+          <View style={styles.loginHero}>
+            <Image source={logoOnNavyImage} style={styles.loginHeroImage} resizeMode="contain" />
+            {/* <Text style={styles.loginTitle}>오늘도수영</Text> */}
+            <View style={styles.loginIconRow}>
+              <View style={styles.loginIconChip}>
+                <Feather name="calendar" size={18} color={colors.blue900} />
+              </View>
+              <View style={styles.loginIconChip}>
+                <Feather name="bell" size={18} color={colors.blue900} />
+              </View>
+              <View style={styles.loginIconChip}>
+                <Feather name="credit-card" size={18} color={colors.blue900} />
+              </View>
             </View>
           </View>
-        </View>
 
-        <View style={styles.loginPanel}>
-        <View style={styles.roleSwitch}>
-          <Pressable style={[styles.roleButton, mode === 'signin' && styles.roleButtonActive]} onPress={() => setMode('signin')}>
-            <Feather name="log-in" size={17} color={mode === 'signin' ? colors.white : colors.blue700} />
-            <Text style={[styles.roleButtonText, mode === 'signin' && styles.roleButtonTextActive]}>로그인</Text>
+          <View style={styles.loginPanel}>
+          <View style={styles.roleSwitch}>
+            <Pressable style={[styles.roleButton, mode === 'signin' && styles.roleButtonActive]} onPress={() => setMode('signin')}>
+              <Feather name="log-in" size={17} color={mode === 'signin' ? colors.white : colors.blue700} />
+              <Text style={[styles.roleButtonText, mode === 'signin' && styles.roleButtonTextActive]}>로그인</Text>
+            </Pressable>
+            <Pressable style={[styles.roleButton, mode === 'signup' && styles.roleButtonActive]} onPress={() => setMode('signup')}>
+              <Feather name="user-plus" size={17} color={mode === 'signup' ? colors.white : colors.blue700} />
+              <Text style={[styles.roleButtonText, mode === 'signup' && styles.roleButtonTextActive]}>회원가입</Text>
+            </Pressable>
+          </View>
+
+          {mode === 'signin' && testAccounts.length > 0 ? (
+            <View style={styles.devLoginPanel}>
+              <Text style={styles.devLoginTitle}>테스트 로그인</Text>
+              <View style={styles.devAccountButtons}>
+                {testAccounts.map((account) => (
+                  <Pressable
+                    key={account.id}
+                    style={[styles.devAccountButton, submitting && styles.disabledButton]}
+                    onPress={() => quickSignIn(account)}
+                    disabled={submitting}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${account.label} 테스트 로그인`}
+                  >
+                    <Feather name={account.icon} size={16} color={colors.blue700} />
+                    <Text style={styles.devAccountButtonText}>{account.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          ) : null}
+
+          {mode === 'signup' ? (
+            <>
+              <TextInput
+                style={styles.input}
+                placeholder="회원 이름"
+                placeholderTextColor={colors.muted}
+                value={displayName}
+                onChangeText={setDisplayName}
+                returnKeyType="next"
+              />
+
+              <TextInput
+                style={styles.input}
+                placeholder="휴대폰 번호"
+                placeholderTextColor={colors.muted}
+                value={phone}
+                onChangeText={setPhone}
+                keyboardType="phone-pad"
+                textContentType="telephoneNumber"
+                returnKeyType="next"
+              />
+            </>
+          ) : null}
+
+          <TextInput
+            style={styles.input}
+            placeholder="이메일"
+            placeholderTextColor={colors.muted}
+            value={email}
+            onChangeText={setEmail}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+            textContentType="emailAddress"
+            returnKeyType="next"
+          />
+
+          <TextInput
+            style={styles.input}
+            placeholder="비밀번호"
+            placeholderTextColor={colors.muted}
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+            textContentType={mode === 'signup' ? 'newPassword' : 'password'}
+            returnKeyType="done"
+            onSubmitEditing={submit}
+          />
+
+          <Pressable
+            style={[styles.authSubmitButton, submitting && styles.disabledButton]}
+            onPress={submit}
+            disabled={submitting}
+            accessibilityRole="button"
+          >
+            {submitting ? <ActivityIndicator color={colors.white} /> : <Feather name={mode === 'signin' ? 'log-in' : 'user-plus'} size={18} color={colors.white} />}
+            <Text style={styles.authSubmitButtonText}>{mode === 'signin' ? '로그인' : '가입'}</Text>
           </Pressable>
-          <Pressable style={[styles.roleButton, mode === 'signup' && styles.roleButtonActive]} onPress={() => setMode('signup')}>
-            <Feather name="user-plus" size={17} color={mode === 'signup' ? colors.white : colors.blue700} />
-            <Text style={[styles.roleButtonText, mode === 'signup' && styles.roleButtonTextActive]}>회원가입</Text>
+
+          <Pressable style={styles.phoneLink} onPress={callContact}>
+            <Feather name="phone-call" size={16} color={colors.blue700} />
+            <Text style={styles.phoneLinkText}>문의 {CONTACT_PHONE}</Text>
           </Pressable>
-        </View>
-
-        {mode === 'signup' ? (
-          <>
-            <TextInput
-              style={styles.input}
-              placeholder="회원 이름"
-              placeholderTextColor={colors.muted}
-              value={displayName}
-              onChangeText={setDisplayName}
-              returnKeyType="next"
-            />
-
-            <TextInput
-              style={styles.input}
-              placeholder="휴대폰 번호"
-              placeholderTextColor={colors.muted}
-              value={phone}
-              onChangeText={setPhone}
-              keyboardType="phone-pad"
-              textContentType="telephoneNumber"
-              returnKeyType="next"
-            />
-          </>
-        ) : null}
-
-        <TextInput
-          style={styles.input}
-          placeholder="이메일"
-          placeholderTextColor={colors.muted}
-          value={email}
-          onChangeText={setEmail}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="email-address"
-          textContentType="emailAddress"
-          returnKeyType="next"
-        />
-
-        <TextInput
-          style={styles.input}
-          placeholder="비밀번호"
-          placeholderTextColor={colors.muted}
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-          textContentType={mode === 'signup' ? 'newPassword' : 'password'}
-          returnKeyType="done"
-          onSubmitEditing={submit}
-        />
-
-        <Pressable
-          style={[styles.authSubmitButton, submitting && styles.disabledButton]}
-          onPress={submit}
-          disabled={submitting}
-          accessibilityRole="button"
-        >
-          {submitting ? <ActivityIndicator color={colors.white} /> : <Feather name={mode === 'signin' ? 'log-in' : 'user-plus'} size={18} color={colors.white} />}
-          <Text style={styles.authSubmitButtonText}>{mode === 'signin' ? '로그인' : '가입'}</Text>
-        </Pressable>
-
-        <Pressable style={styles.phoneLink} onPress={callContact}>
-          <Feather name="phone-call" size={16} color={colors.blue700} />
-          <Text style={styles.phoneLinkText}>문의 {CONTACT_PHONE}</Text>
-        </Pressable>
-        </View>
-      </ScrollView>
+          </View>
+        </KeyboardAwareScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -1195,18 +1887,24 @@ function LoginScreen({
 function HomeScreen({
   userRole,
   nextClass,
-  nextFixedClass,
   notices,
   fixedLessons,
+  myFixedLessonSlots,
+  myReservations,
   openSlots,
   slots,
   members,
   changeRequests,
+  absenceRequests,
   assignmentRequests,
-  lessonFeedbacks,
   lessonFeedbackTargets,
+  lessonFeedbacks,
+  instructorLessonTimes,
   specialLessons,
   specialLessonRegistrations,
+  memberRequests,
+  storeProducts,
+  storeOrders,
   passBalance,
   onAdjustMemberPass,
   onUpdateMemberPassProduct,
@@ -1218,33 +1916,49 @@ function HomeScreen({
   onAssignLessonReservation,
   onCancelLessonReservation,
   onCancelLessonSlot,
-  onCreateChangeRequest,
+  onSaveInstructorLessonTime,
+  onCancelInstructorLessonTime,
   onCancelChangeRequest,
   onReviewChangeRequest,
+  onCancelAbsenceRequest,
+  onReviewAbsenceRequest,
   onCancelAssignmentRequest,
   onReviewAssignmentRequest,
   onPublishLessonFeedback,
   onCreateSpecialLesson,
+  onUpdateSpecialLesson,
   onApplySpecialLesson,
   onCancelSpecialLessonRegistration,
   onReviewSpecialLessonRegistration,
+  onCreateMemberRequest,
+  onReviewMemberRequest,
+  onCreateStoreProduct,
+  onCreateStoreOrder,
+  onCancelStoreOrder,
+  onReviewStoreOrder,
   onReservePress,
   onNoticePress
 }: {
   userRole: UserRole;
   nextClass?: ClassSlot;
-  nextFixedClass?: ClassSlot;
   notices: Notice[];
   fixedLessons: FixedLesson[];
+  myFixedLessonSlots: ClassSlot[];
+  myReservations: ClassSlot[];
   openSlots: ClassSlot[];
   slots: ClassSlot[];
   members: MemberSummary[];
   changeRequests: LessonChangeRequest[];
+  absenceRequests: LessonAbsenceRequest[];
   assignmentRequests: LessonAssignmentRequest[];
-  lessonFeedbacks: LessonFeedback[];
   lessonFeedbackTargets: LessonFeedbackTarget[];
+  lessonFeedbacks: LessonFeedback[];
+  instructorLessonTimes: InstructorLessonTime[];
   specialLessons: SpecialLesson[];
   specialLessonRegistrations: SpecialLessonRegistration[];
+  memberRequests: MemberRequest[];
+  storeProducts: StoreProduct[];
+  storeOrders: StoreOrder[];
   passBalance: number;
   onAdjustMemberPass: (memberId: string, amount: number) => Promise<void>;
   onUpdateMemberPassProduct: (memberId: string, lessonCapacity: number) => Promise<void>;
@@ -1253,25 +1967,36 @@ function HomeScreen({
     weekday: number,
     hour: number,
     minute: number,
+    durationMinutes: number,
     fixedLessonId?: string | null
   ) => Promise<void>;
   onCancelFixedLesson: (fixedLessonId: string) => Promise<void>;
   onUpdateLessonInstructor: (slotId: string, instructor: string) => Promise<void>;
   onCreateLessonSlot: (slotDate: string, hour: number, minute: number, instructor: string, durationMinutes: number) => Promise<void>;
   onUpdateLessonSlot: (slotId: string, instructor: string, durationMinutes: number, capacity: number) => Promise<void>;
-  onAssignLessonReservation: (slotId: string, memberId: string) => Promise<void>;
+  onAssignLessonReservation: (slotId: string, memberId: string, durationMinutes: number) => Promise<void>;
   onCancelLessonReservation: (slotId: string, memberId: string) => Promise<void>;
   onCancelLessonSlot: (slotId: string) => Promise<void>;
-  onCreateChangeRequest: (targetSlotId: string) => Promise<void>;
+  onSaveInstructorLessonTime: (input: SaveInstructorLessonTimeInput) => Promise<void>;
+  onCancelInstructorLessonTime: (timeId: string) => Promise<void>;
   onCancelChangeRequest: (requestId: string) => Promise<void>;
   onReviewChangeRequest: (requestId: string, approved: boolean) => Promise<void>;
+  onCancelAbsenceRequest: (requestId: string) => Promise<void>;
+  onReviewAbsenceRequest: (requestId: string, approved: boolean) => Promise<void>;
   onCancelAssignmentRequest: (requestId: string) => Promise<void>;
-  onReviewAssignmentRequest: (requestId: string, approved: boolean) => Promise<void>;
+  onReviewAssignmentRequest: (requestId: string, approved: boolean, comment?: string) => Promise<void>;
   onPublishLessonFeedback: (input: PublishLessonFeedbackInput) => Promise<void>;
   onCreateSpecialLesson: (input: CreateSpecialLessonInput) => Promise<void>;
+  onUpdateSpecialLesson: (input: UpdateSpecialLessonInput) => Promise<void>;
   onApplySpecialLesson: (specialLessonId: string) => Promise<SpecialLessonRegistrationStatus>;
   onCancelSpecialLessonRegistration: (registrationId: string) => Promise<void>;
   onReviewSpecialLessonRegistration: (registrationId: string, approved: boolean) => Promise<void>;
+  onCreateMemberRequest: (input: CreateMemberRequestInput) => Promise<void>;
+  onReviewMemberRequest: (requestId: string, status: MemberRequestStatus, reply?: string) => Promise<void>;
+  onCreateStoreProduct: (input: CreateStoreProductInput) => Promise<void>;
+  onCreateStoreOrder: (productId: string, quantity: number) => Promise<void>;
+  onCancelStoreOrder: (orderId: string) => Promise<void>;
+  onReviewStoreOrder: (orderId: string, approved: boolean, comment?: string) => Promise<void>;
   onReservePress: () => void;
   onNoticePress: () => void;
 }) {
@@ -1285,10 +2010,15 @@ function HomeScreen({
         notices={notices}
         openSlots={openSlots}
         changeRequests={changeRequests}
+        absenceRequests={absenceRequests}
         assignmentRequests={assignmentRequests}
         lessonFeedbackTargets={lessonFeedbackTargets}
+        instructorLessonTimes={instructorLessonTimes}
         specialLessons={specialLessons}
         specialLessonRegistrations={specialLessonRegistrations}
+        memberRequests={memberRequests}
+        storeProducts={storeProducts}
+        storeOrders={storeOrders}
         onAdjustMemberPass={onAdjustMemberPass}
         onUpdateMemberPassProduct={onUpdateMemberPassProduct}
         onSaveFixedLesson={onSaveFixedLesson}
@@ -1299,11 +2029,18 @@ function HomeScreen({
         onAssignLessonReservation={onAssignLessonReservation}
         onCancelLessonReservation={onCancelLessonReservation}
         onCancelLessonSlot={onCancelLessonSlot}
+        onSaveInstructorLessonTime={onSaveInstructorLessonTime}
+        onCancelInstructorLessonTime={onCancelInstructorLessonTime}
         onReviewChangeRequest={onReviewChangeRequest}
+        onReviewAbsenceRequest={onReviewAbsenceRequest}
         onReviewAssignmentRequest={onReviewAssignmentRequest}
         onPublishLessonFeedback={onPublishLessonFeedback}
         onCreateSpecialLesson={onCreateSpecialLesson}
+        onUpdateSpecialLesson={onUpdateSpecialLesson}
         onReviewSpecialLessonRegistration={onReviewSpecialLessonRegistration}
+        onReviewMemberRequest={onReviewMemberRequest}
+        onCreateStoreProduct={onCreateStoreProduct}
+        onReviewStoreOrder={onReviewStoreOrder}
         onNoticePress={onNoticePress}
       />
     );
@@ -1312,203 +2049,604 @@ function HomeScreen({
   return (
     <MemberHomeScreen
       nextClass={nextClass}
-      nextFixedClass={nextFixedClass}
-      notices={notices}
       fixedLessons={fixedLessons}
-      openSlots={openSlots}
+      myFixedLessonSlots={myFixedLessonSlots}
+      myReservations={myReservations}
+      slots={slots}
       changeRequests={changeRequests}
+      absenceRequests={absenceRequests}
       assignmentRequests={assignmentRequests}
       lessonFeedbacks={lessonFeedbacks}
       specialLessons={specialLessons}
+      memberRequests={memberRequests}
+      storeProducts={storeProducts}
+      storeOrders={storeOrders}
       passBalance={passBalance}
-      onCreateChangeRequest={onCreateChangeRequest}
       onCancelChangeRequest={onCancelChangeRequest}
+      onCancelAbsenceRequest={onCancelAbsenceRequest}
       onCancelAssignmentRequest={onCancelAssignmentRequest}
       onApplySpecialLesson={onApplySpecialLesson}
       onCancelSpecialLessonRegistration={onCancelSpecialLessonRegistration}
+      onCreateMemberRequest={onCreateMemberRequest}
+      onCreateStoreOrder={onCreateStoreOrder}
+      onCancelStoreOrder={onCancelStoreOrder}
       onReservePress={onReservePress}
-      onNoticePress={onNoticePress}
     />
+  );
+}
+
+function HomeSectionMenu<T extends string>({
+  options,
+  selectedId,
+  onSelect
+}: {
+  options: Array<HomeMenuOption<T>>;
+  selectedId: T;
+  onSelect: (id: T) => void;
+}) {
+  return (
+    <View style={styles.homeSectionMenu}>
+      {options.map((option) => {
+        const selected = selectedId === option.id;
+        const showCount = typeof option.count === 'number' && option.count > 0;
+
+        return (
+          <Pressable
+            key={option.id}
+            style={[styles.homeSectionMenuButton, selected && styles.homeSectionMenuButtonActive]}
+            onPress={() => onSelect(option.id)}
+            accessibilityRole="button"
+            accessibilityLabel={option.label}
+          >
+            <View style={styles.homeSectionMenuTopRow}>
+              <View style={[styles.homeSectionMenuIcon, selected && styles.homeSectionMenuIconActive]}>
+                <Feather name={option.icon} size={18} color={selected ? colors.white : colors.blue700} />
+              </View>
+              {showCount ? (
+                <Text style={[styles.homeSectionMenuCount, selected && styles.homeSectionMenuCountActive]}>{option.count}</Text>
+              ) : null}
+            </View>
+            <View style={styles.homeSectionMenuCopy}>
+              <View style={styles.homeSectionMenuTitleRow}>
+                <Text style={[styles.homeSectionMenuText, selected && styles.homeSectionMenuTextActive]} numberOfLines={1}>
+                  {option.label}
+                </Text>
+                {option.description ? (
+                  <InfoTooltip
+                    message={option.description}
+                    iconColor={selected ? colors.blue900 : colors.blue700}
+                    accessibilityLabel={`${option.label} 설명`}
+                  />
+                ) : null}
+              </View>
+            </View>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function InfoTooltip({
+  message,
+  iconColor = colors.blue700,
+  accessibilityLabel = '설명 보기'
+}: {
+  message: string;
+  iconColor?: string;
+  accessibilityLabel?: string;
+}) {
+  const anchorRef = useRef<View>(null);
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const { width: windowWidth } = useWindowDimensions();
+  const tooltipWidth = Math.min(TOOLTIP_MAX_WIDTH, Math.max(160, windowWidth - TOOLTIP_HORIZONTAL_MARGIN * 2));
+  const tooltipLeft = anchor
+    ? Math.min(
+        Math.max(TOOLTIP_HORIZONTAL_MARGIN, anchor.x + anchor.width / 2 - tooltipWidth / 2),
+        windowWidth - tooltipWidth - TOOLTIP_HORIZONTAL_MARGIN
+      )
+    : TOOLTIP_HORIZONTAL_MARGIN;
+  const tooltipTop = anchor ? anchor.y + anchor.height + 8 : 0;
+  const caretLeft = anchor
+    ? Math.min(Math.max(14, anchor.x + anchor.width / 2 - tooltipLeft - 5), tooltipWidth - 20)
+    : 18;
+
+  function toggleTooltip() {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+
+    anchorRef.current?.measureInWindow((x, y, width, height) => {
+      setAnchor({ x, y, width, height });
+      setOpen(true);
+    });
+  }
+
+  return (
+    <View style={styles.infoTooltipWrap}>
+      <Pressable
+        ref={anchorRef}
+        style={styles.infoIconButton}
+        onPress={toggleTooltip}
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
+      >
+        <Feather name="info" size={14} color={iconColor} />
+      </Pressable>
+      <Modal visible={open} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setOpen(false)}>
+        <Pressable style={styles.tooltipOverlay} onPress={() => setOpen(false)}>
+          {anchor ? (
+            <View style={[styles.tooltipBubble, { left: tooltipLeft, top: tooltipTop, width: tooltipWidth }]}>
+              <View style={[styles.tooltipCaret, { left: caretLeft }]} />
+              <Text style={styles.tooltipText}>{message}</Text>
+            </View>
+          ) : null}
+        </Pressable>
+      </Modal>
+    </View>
+  );
+}
+
+function HomeEmptyPanel({ icon, message }: { icon: keyof typeof Feather.glyphMap; message: string }) {
+  return (
+    <View style={styles.adminOverview}>
+      <View style={styles.emptyState}>
+        <Feather name={icon} size={22} color={colors.blue700} />
+        <Text style={styles.emptyStateText}>{message}</Text>
+      </View>
+    </View>
   );
 }
 
 function MemberHomeScreen({
   nextClass,
-  nextFixedClass,
-  notices,
   fixedLessons,
-  openSlots,
+  myFixedLessonSlots,
+  myReservations,
+  slots,
   changeRequests,
+  absenceRequests,
   assignmentRequests,
   lessonFeedbacks,
   specialLessons,
+  memberRequests,
+  storeProducts,
+  storeOrders,
   passBalance,
-  onCreateChangeRequest,
   onCancelChangeRequest,
+  onCancelAbsenceRequest,
   onCancelAssignmentRequest,
   onApplySpecialLesson,
   onCancelSpecialLessonRegistration,
-  onReservePress,
-  onNoticePress
+  onCreateMemberRequest,
+  onCreateStoreOrder,
+  onCancelStoreOrder,
+  onReservePress
 }: {
   nextClass?: ClassSlot;
-  nextFixedClass?: ClassSlot;
-  notices: Notice[];
   fixedLessons: FixedLesson[];
-  openSlots: ClassSlot[];
+  myFixedLessonSlots: ClassSlot[];
+  myReservations: ClassSlot[];
+  slots: ClassSlot[];
   changeRequests: LessonChangeRequest[];
+  absenceRequests: LessonAbsenceRequest[];
   assignmentRequests: LessonAssignmentRequest[];
   lessonFeedbacks: LessonFeedback[];
   specialLessons: SpecialLesson[];
+  memberRequests: MemberRequest[];
+  storeProducts: StoreProduct[];
+  storeOrders: StoreOrder[];
   passBalance: number;
-  onCreateChangeRequest: (targetSlotId: string) => Promise<void>;
   onCancelChangeRequest: (requestId: string) => Promise<void>;
+  onCancelAbsenceRequest: (requestId: string) => Promise<void>;
   onCancelAssignmentRequest: (requestId: string) => Promise<void>;
   onApplySpecialLesson: (specialLessonId: string) => Promise<SpecialLessonRegistrationStatus>;
   onCancelSpecialLessonRegistration: (registrationId: string) => Promise<void>;
+  onCreateMemberRequest: (input: CreateMemberRequestInput) => Promise<void>;
+  onCreateStoreOrder: (productId: string, quantity: number) => Promise<void>;
+  onCancelStoreOrder: (orderId: string) => Promise<void>;
   onReservePress: () => void;
-  onNoticePress: () => void;
 }) {
-  const pendingRequest = changeRequests.find((request) => request.status === 'pending');
-  const recentRequest = changeRequests.find((request) => request.status !== 'pending');
+  const [selectedSection, setSelectedSection] = useState<MemberHomeSection>('lessons');
+  const [detailView, setDetailView] = useState<MemberDetailView | null>(null);
+  const pendingChangeRequests = changeRequests.filter((request) => request.status === 'pending');
+  const recentChangeRequest = changeRequests.find((request) => request.status !== 'pending');
+  const pendingAbsenceRequests = absenceRequests.filter((request) => request.status === 'pending');
+  const recentAbsenceRequest = absenceRequests.find((request) => request.status !== 'pending');
   const pendingAssignmentRequests = assignmentRequests.filter((request) => request.status === 'pending');
   const recentAssignmentRequest = assignmentRequests.find((request) => request.status !== 'pending');
+  const pendingRequestCount = pendingAssignmentRequests.length + pendingChangeRequests.length + pendingAbsenceRequests.length;
+  const allLessonRequestCount = changeRequests.length + absenceRequests.length + assignmentRequests.length;
+  const upcomingFixedLessonSlots = myFixedLessonSlots.filter(isUpcomingSlot);
+  const upcomingReservations = myReservations.filter(isUpcomingSlot);
+  const upcomingLessonCount = upcomingFixedLessonSlots.length + upcomingReservations.length;
+  const activeStoreProductCount = storeProducts.filter((product) => product.isActive).length;
+  const upcomingSpecialLessonCount = specialLessons.filter((lesson) => new Date(lesson.startsAt).getTime() >= Date.now()).length;
+  const fixedLessonSummary = formatFixedLessonSummary(fixedLessons);
+  const memberMenuOptions: Array<HomeMenuOption<MemberHomeSection>> = [
+    { id: 'lessons', label: '내 수업', description: '', icon: 'calendar', count: upcomingLessonCount },
+    { id: 'requests', label: '요청 관리', description: '', icon: 'inbox', count: allLessonRequestCount },
+    { id: 'special', label: '특별수업', description: '', icon: 'star', count: upcomingSpecialLessonCount },
+    { id: 'store', label: '상품 구매', description: '', icon: 'shopping-bag', count: activeStoreProductCount },
+    { id: 'feedback', label: '수업 피드백', description: '', icon: 'message-circle', count: lessonFeedbacks.length }
+  ];
+  const selectSection = (section: MemberHomeSection) => {
+    setSelectedSection(section);
+    setDetailView(null);
+  };
+
+  const detailTitle = (() => {
+    if (detailView === 'pastLessons') {
+      return '지난 내 수업';
+    }
+
+    if (detailView === 'lessonRequests') {
+      return '전체 수업 요청';
+    }
+
+    if (detailView === 'storeOrders') {
+      return '내 구매 신청';
+    }
+
+    return '';
+  })();
 
   return (
-    <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+    <KeyboardAwareScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
       <View style={styles.focusCard}>
         <View style={styles.heroTopRow}>
-          <View style={styles.heroIconBadge}>
-            <Feather name="calendar" size={24} color={colors.blue900} />
-          </View>
-          <Text style={styles.focusBadge}>잔여 {passBalance}회</Text>
+          <Text style={styles.focusEyebrow} numberOfLines={1}>{nextClass ? '다음 예약 수업' : '예약된 다음 수업 없음'}</Text>
+          <Text style={styles.focusBadge}>남은 수업권 {passBalance}회</Text>
         </View>
         <View>
-          <Text style={styles.heroTitle}>{nextClass ? `${nextClass.shortDateLabel} ${formatSlotHour(nextClass.startsAt)}` : '예정된 수업 없음'}</Text>
-          <Text style={styles.heroBody}>
-            {nextClass ? `${nextClass.instructor} 강사 · ${nextClass.weekdayLabel}` : '관리자에게 고정 수업 배정을 요청해주세요'}
+          <Text style={styles.heroTitle} numberOfLines={1}>{nextClass ? `${nextClass.shortDateLabel} ${formatSlotHour(nextClass.startsAt)}` : '예정된 수업 없음'}</Text>
+          <Text style={styles.heroBody} numberOfLines={2}>
+            {nextClass ? `${nextClass.weekdayLabel} · ${nextClass.instructor} 강사 · ${formatLessonDuration(nextClass.durationMinutes)}` : '고정 수업이 배정되면 여기에 표시됩니다'}
           </Text>
         </View>
-        <Pressable style={styles.primaryButton} onPress={onReservePress}>
-          <Feather name="search" size={18} color={colors.blue700} />
-          <Text style={styles.primaryButtonText}>빈자리 확인</Text>
-        </Pressable>
-      </View>
-
-      <View style={styles.summaryStrip}>
-        <View style={styles.summaryItem}>
-          <Text style={styles.summaryValue}>{fixedLessons.length}</Text>
-          <Text style={styles.summaryLabel}>고정수업</Text>
+        <View style={styles.memberFixedScheduleLine}>
+          <Feather name="repeat" size={15} color={colors.blue700} />
+          <Text style={styles.memberFixedScheduleText} numberOfLines={1}>내 고정수업 · {fixedLessonSummary}</Text>
         </View>
-        <View style={styles.summaryItem}>
-          <Text style={styles.summaryValue}>{passBalance}</Text>
-          <Text style={styles.summaryLabel}>남은횟수</Text>
-        </View>
-        <View style={styles.summaryItem}>
-          <Text style={styles.summaryValue}>{pendingAssignmentRequests.length}</Text>
-          <Text style={styles.summaryLabel}>승인대기</Text>
-        </View>
-      </View>
-
-      <LessonChangeRequestPanel
-        nextClass={nextFixedClass}
-        openSlots={openSlots}
-        pendingRequest={pendingRequest}
-        recentRequest={recentRequest}
-        onCreateChangeRequest={onCreateChangeRequest}
-        onCancelChangeRequest={onCancelChangeRequest}
-      />
-
-      <View style={styles.adminOverview}>
-        <View style={styles.adminOverviewHeader}>
-          <Text style={styles.adminOverviewTitle}>내 고정 수업</Text>
-          <Text style={styles.adminOverviewCount}>{fixedLessons.length}개</Text>
-        </View>
-        {fixedLessons.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Feather name="clock" size={22} color={colors.blue700} />
-            <Text style={styles.emptyStateText}>아직 고정 수업이 배정되지 않았습니다.</Text>
+        {pendingRequestCount > 0 ? (
+          <View style={styles.memberPendingLine}>
+            <Feather name="clock" size={15} color={colors.warning} />
+            <Text style={styles.memberPendingText}>관리자 확인 대기 {pendingRequestCount}건</Text>
           </View>
-        ) : (
-          fixedLessons.map((lesson) => (
-            <View key={lesson.id} style={styles.adminReservationRow}>
-              <View style={styles.adminReservationTime}>
-                <Text style={styles.adminReservationDay}>{lesson.weekdayLabel}</Text>
-                <Text style={styles.adminReservationHour}>{lesson.timeLabel}</Text>
-              </View>
-              <View style={styles.adminReservationCopy}>
-                <Text style={styles.adminReservationName}>{lesson.instructor} 강사</Text>
-                <Text style={styles.adminReservationMeta}>{formatLessonCapacity(lesson.lessonCapacity)} 수업</Text>
-              </View>
-            </View>
-          ))
-        )}
+        ) : null}
+        <View style={styles.memberHeroActions}>
+          <Pressable style={styles.primaryButton} onPress={onReservePress}>
+            <Feather name="arrow-right-circle" size={18} color={colors.white} />
+            <Text style={styles.primaryButtonText}>수업 신청·취소하기</Text>
+          </Pressable>
+        </View>
       </View>
 
-      <View style={styles.adminOverview}>
-        <View style={styles.adminOverviewHeader}>
-          <Text style={styles.adminOverviewTitle}>신청 가능한 빈자리</Text>
-          <Text style={styles.adminOverviewCount}>{openSlots.reduce((count, slot) => count + slot.openSeatCount, 0)}개</Text>
-        </View>
-        {openSlots.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Feather name="unlock" size={22} color={colors.blue700} />
-            <Text style={styles.emptyStateText}>지금 신청 가능한 빈자리가 없습니다.</Text>
-          </View>
+      <HomeSectionMenu options={memberMenuOptions} selectedId={selectedSection} onSelect={selectSection} />
+
+      {detailView ? (
+        <MemberDetailHeader title={detailTitle} onBack={() => setDetailView(null)} />
+      ) : null}
+
+      {detailView === 'pastLessons' ? (
+        <MemberPastLessonOverview
+          fixedLessonSlots={myFixedLessonSlots}
+          reservations={myReservations}
+          feedbacks={lessonFeedbacks}
+        />
+      ) : null}
+
+      {detailView === 'lessonRequests' ? (
+        <MemberRequestSummary
+          pendingChangeRequests={pendingChangeRequests}
+          recentChangeRequest={recentChangeRequest}
+          pendingAbsenceRequests={pendingAbsenceRequests}
+          recentAbsenceRequest={recentAbsenceRequest}
+          pendingRequests={pendingAssignmentRequests}
+          recentRequest={recentAssignmentRequest}
+          changeRequests={changeRequests}
+          absenceRequests={absenceRequests}
+          assignmentRequests={assignmentRequests}
+          onCancelChangeRequest={onCancelChangeRequest}
+          onCancelAbsenceRequest={onCancelAbsenceRequest}
+          onCancelAssignmentRequest={onCancelAssignmentRequest}
+          showAll
+        />
+      ) : null}
+
+      {detailView === 'storeOrders' ? (
+        <MemberStoreOrderOverview orders={storeOrders} onCancelStoreOrder={onCancelStoreOrder} />
+      ) : null}
+
+      {!detailView && selectedSection === 'lessons' ? (
+        <MemberLessonOverview
+          fixedLessonSlots={myFixedLessonSlots}
+          reservations={myReservations}
+          onShowPastLessons={() => setDetailView('pastLessons')}
+        />
+      ) : null}
+
+      {!detailView && selectedSection === 'requests' ? (
+        <>
+          <MemberRequestSummary
+            pendingChangeRequests={pendingChangeRequests}
+            recentChangeRequest={recentChangeRequest}
+            pendingAbsenceRequests={pendingAbsenceRequests}
+            recentAbsenceRequest={recentAbsenceRequest}
+            pendingRequests={pendingAssignmentRequests}
+            recentRequest={recentAssignmentRequest}
+            changeRequests={changeRequests}
+            absenceRequests={absenceRequests}
+            assignmentRequests={assignmentRequests}
+            onCancelChangeRequest={onCancelChangeRequest}
+            onCancelAbsenceRequest={onCancelAbsenceRequest}
+            onCancelAssignmentRequest={onCancelAssignmentRequest}
+            onShowAll={allLessonRequestCount > 0 ? () => setDetailView('lessonRequests') : undefined}
+          />
+        </>
+      ) : null}
+
+      {!detailView && selectedSection === 'special' ? (
+        <MemberSpecialLessonOverview
+          specialLessons={specialLessons}
+          onApplySpecialLesson={onApplySpecialLesson}
+          onCancelSpecialLessonRegistration={onCancelSpecialLessonRegistration}
+        />
+      ) : null}
+
+      {!detailView && selectedSection === 'store' ? (
+        <MemberStoreOverview
+          products={storeProducts}
+          orders={storeOrders}
+          onCreateStoreOrder={onCreateStoreOrder}
+          onShowOrders={() => setDetailView('storeOrders')}
+        />
+      ) : null}
+
+      {!detailView && selectedSection === 'feedback' ? (
+        lessonFeedbacks.length > 0 ? (
+          <MemberLessonFeedbackOverview feedbacks={lessonFeedbacks} />
         ) : (
-          openSlots.slice(0, 3).map((slot) => (
-            <View key={slot.id} style={styles.adminReservationRow}>
+          <HomeEmptyPanel icon="message-circle" message="아직 등록된 수업 피드백이 없습니다." />
+        )
+      ) : null}
+    </KeyboardAwareScrollView>
+  );
+}
+
+function MemberDetailHeader({ title, onBack }: { title: string; onBack: () => void }) {
+  return (
+    <View style={styles.memberDetailHeader}>
+      <Pressable style={styles.memberDetailBackButton} onPress={onBack} accessibilityRole="button" accessibilityLabel="뒤로가기">
+        <Feather name="chevron-left" size={20} color={colors.blue700} />
+        <Text style={styles.memberDetailBackText}>뒤로</Text>
+      </Pressable>
+      <Text style={styles.memberDetailTitle}>{title}</Text>
+    </View>
+  );
+}
+
+function MemberLessonOverview({
+  fixedLessonSlots,
+  reservations,
+  onShowPastLessons
+}: {
+  fixedLessonSlots: ClassSlot[];
+  reservations: ClassSlot[];
+  onShowPastLessons: () => void;
+}) {
+  const upcomingFixedSlots = fixedLessonSlots.filter(isUpcomingSlot);
+  const upcomingReservations = reservations.filter(isUpcomingSlot);
+  const upcomingLessons = [
+    ...upcomingFixedSlots.map((slot) => ({ slot, label: '고정 수업' })),
+    ...upcomingReservations.map((slot) => ({ slot, label: slot.isActive ? '추가 수업' : '자유수영' }))
+  ].sort((a, b) => new Date(a.slot.startsAt).getTime() - new Date(b.slot.startsAt).getTime());
+  const totalCount = upcomingLessons.length;
+
+  return (
+    <View style={styles.adminOverview}>
+      <View style={styles.adminOverviewHeader}>
+        <View style={styles.feedbackCardTitleBlock}>
+          <Text style={styles.adminOverviewTitle}>예정 수업</Text>
+        </View>
+        <Text style={[styles.timelineBadge, styles.timelineBadgeUpcoming]}>{totalCount}개 예정</Text>
+      </View>
+      {totalCount === 0 ? (
+        <View style={styles.emptyState}>
+          <Feather name="clock" size={22} color={colors.blue700} />
+          <Text style={styles.emptyStateText}>아직 예정된 수업이 없습니다.</Text>
+        </View>
+      ) : null}
+
+      {upcomingLessons.length > 0 ? (
+        <View style={styles.memberLessonGroup}>
+          {/* <Text style={styles.memberLessonGroupTitle}></Text> */}
+          {upcomingLessons.map(({ slot, label }) => (
+            <View key={`${label}-${slot.id}`} style={[styles.adminReservationRow, styles.timelineCardUpcoming]}>
               <View style={styles.adminReservationTime}>
                 <Text style={styles.adminReservationDay}>{slot.shortDateLabel}</Text>
                 <Text style={styles.adminReservationHour}>{formatSlotHour(slot.startsAt)}</Text>
               </View>
               <View style={styles.adminReservationCopy}>
-                <Text style={styles.adminReservationName}>{slot.instructor} 강사</Text>
-                <Text style={styles.adminReservationMeta}>빈자리 {slot.openSeatCount}개</Text>
+                <Text style={styles.adminReservationName}>{label}</Text>
+                <Text style={styles.adminReservationMeta}>
+                  {slot.weekdayLabel} · {slot.instructor} 강사 · {formatLessonDuration(slot.durationMinutes)}
+                </Text>
               </View>
+              <Text style={[styles.timelineBadge, styles.timelineBadgeUpcoming]}>예정</Text>
             </View>
-          ))
-        )}
-        <Pressable style={styles.secondaryActionButton} onPress={onReservePress}>
-          <Feather name="plus-circle" size={17} color={colors.blue700} />
-          <Text style={styles.secondaryActionText}>달력에서 신청</Text>
-        </Pressable>
-      </View>
+          ))}
+        </View>
+      ) : null}
 
-      <MemberAssignmentRequestSummary
-        pendingRequests={pendingAssignmentRequests}
-        recentRequest={recentAssignmentRequest}
-        onCancelAssignmentRequest={onCancelAssignmentRequest}
-      />
-
-      <MemberLessonFeedbackOverview feedbacks={lessonFeedbacks} />
-
-      <MemberSpecialLessonOverview
-        specialLessons={specialLessons}
-        onApplySpecialLesson={onApplySpecialLesson}
-        onCancelSpecialLessonRegistration={onCancelSpecialLessonRegistration}
-      />
-
-      <SectionHeader title="최근 공지" actionLabel="전체" onAction={onNoticePress} />
-      {notices.slice(0, 2).map((notice) => (
-        <NoticeCard key={notice.id} notice={notice} compact />
-      ))}
-    </ScrollView>
+      <Pressable style={styles.secondaryActionButton} onPress={onShowPastLessons}>
+        <Feather name="clock" size={17} color={colors.blue700} />
+        <Text style={styles.secondaryActionText}>지난 내 수업</Text>
+      </Pressable>
+    </View>
   );
 }
 
-function MemberAssignmentRequestSummary({
+function MemberPastLessonOverview({
+  fixedLessonSlots,
+  reservations,
+  feedbacks
+}: {
+  fixedLessonSlots: ClassSlot[];
+  reservations: ClassSlot[];
+  feedbacks: LessonFeedback[];
+}) {
+  const [selectedFeedbackId, setSelectedFeedbackId] = useState<string | null>(null);
+  const feedbackBySlot = useMemo(() => new Map(feedbacks.map((feedback) => [feedback.slotId, feedback])), [feedbacks]);
+  const pastLessons = useMemo(
+    () =>
+      [
+        ...fixedLessonSlots
+          .filter((slot) => !isUpcomingSlot(slot))
+          .map((slot) => ({ slot, label: '고정 수업' })),
+        ...reservations
+          .filter((slot) => !isUpcomingSlot(slot))
+          .map((slot) => ({ slot, label: slot.isActive ? '추가 수업' : '자유수영' }))
+      ].sort((a, b) => new Date(b.slot.startsAt).getTime() - new Date(a.slot.startsAt).getTime()),
+    [fixedLessonSlots, reservations]
+  );
+
+  return (
+    <View style={styles.adminOverview}>
+      <View style={styles.adminOverviewHeader}>
+        <Text style={styles.adminOverviewTitle}>지난 내 수업</Text>
+        <Text style={[styles.timelineBadge, styles.timelineBadgePast]}>{pastLessons.length}개 완료</Text>
+      </View>
+
+      {pastLessons.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Feather name="clock" size={22} color={colors.blue700} />
+          <Text style={styles.emptyStateText}>지난 수업 내역이 없습니다.</Text>
+        </View>
+      ) : (
+        pastLessons.map(({ slot, label }) => {
+          const feedback = feedbackBySlot.get(slot.id);
+          const feedbackOpen = Boolean(feedback && selectedFeedbackId === feedback.id);
+
+          return (
+            <View key={`${label}-${slot.id}`} style={styles.memberPastLessonItem}>
+              <View style={[styles.adminReservationRow, styles.timelineCardPast]}>
+                <View style={styles.adminReservationTime}>
+                  <Text style={styles.adminReservationDay}>{slot.shortDateLabel}</Text>
+                  <Text style={styles.adminReservationHour}>{formatSlotHour(slot.startsAt)}</Text>
+                </View>
+                <View style={styles.adminReservationCopy}>
+                  <Text style={styles.adminReservationName}>{label}</Text>
+                  <Text style={[styles.adminReservationMeta, styles.memberPastLessonMeta]} numberOfLines={1}>
+                    {slot.shortDateLabel} {formatSlotHour(slot.startsAt)} · {slot.instructor} 강사 · {formatLessonDuration(slot.durationMinutes)}
+                  </Text>
+                </View>
+                <Pressable
+                  style={[styles.memberFeedbackButton, !feedback && styles.disabledButton]}
+                  onPress={() => feedback && setSelectedFeedbackId(feedbackOpen ? null : feedback.id)}
+                  disabled={!feedback}
+                  accessibilityRole="button"
+                >
+                  <Text style={[styles.memberFeedbackButtonText, !feedback && styles.memberFeedbackButtonTextDisabled]}>
+                    {feedback ? (feedbackOpen ? '닫기' : '피드백 보기') : '피드백 없음'}
+                  </Text>
+                </Pressable>
+              </View>
+              {feedbackOpen && feedback ? (
+                <View style={[styles.feedbackCard, styles.memberInlineFeedbackCard]}>
+                  <View style={styles.feedbackCardHeader}>
+                    <View style={styles.feedbackCardTitleBlock}>
+                      <Text style={styles.requestTitle}>피드백</Text>
+                      <Text style={styles.requestMeta}>
+                        {formatSlotBrief(feedback.startsAt)} · {feedback.instructor} 강사
+                      </Text>
+                    </View>
+                  </View>
+                  <LessonFeedbackMediaPreview uri={feedback.mediaUri} mediaType={feedback.mediaType ?? undefined} />
+                  {feedback.feedbackText ? <Text style={styles.feedbackBody}>{feedback.feedbackText}</Text> : null}
+                </View>
+              ) : null}
+            </View>
+          );
+        })
+      )}
+    </View>
+  );
+}
+
+function MemberRequestSummary({
+  pendingChangeRequests,
+  recentChangeRequest,
+  pendingAbsenceRequests,
+  recentAbsenceRequest,
   pendingRequests,
   recentRequest,
-  onCancelAssignmentRequest
+  changeRequests,
+  absenceRequests,
+  assignmentRequests,
+  onCancelChangeRequest,
+  onCancelAbsenceRequest,
+  onCancelAssignmentRequest,
+  onShowAll,
+  showAll = false
 }: {
+  pendingChangeRequests: LessonChangeRequest[];
+  recentChangeRequest?: LessonChangeRequest;
+  pendingAbsenceRequests: LessonAbsenceRequest[];
+  recentAbsenceRequest?: LessonAbsenceRequest;
   pendingRequests: LessonAssignmentRequest[];
   recentRequest?: LessonAssignmentRequest;
+  changeRequests: LessonChangeRequest[];
+  absenceRequests: LessonAbsenceRequest[];
+  assignmentRequests: LessonAssignmentRequest[];
+  onCancelChangeRequest: (requestId: string) => Promise<void>;
+  onCancelAbsenceRequest: (requestId: string) => Promise<void>;
   onCancelAssignmentRequest: (requestId: string) => Promise<void>;
+  onShowAll?: () => void;
+  showAll?: boolean;
 }) {
   const [cancelingId, setCancelingId] = useState<string | null>(null);
+  const pendingCount = pendingRequests.length + pendingChangeRequests.length + pendingAbsenceRequests.length;
+  const allRequestItems = [
+    ...changeRequests.map((request) => ({
+      id: request.id,
+      kind: 'change' as const,
+      title: '수업 변경',
+      meta: `${formatSlotBrief(request.sourceStartsAt)} → ${formatSlotBrief(request.targetStartsAt)}`,
+      detail: `${request.sourceInstructor} 강사 → ${request.targetInstructor} 강사`,
+      startsAt: request.targetStartsAt,
+      createdAt: request.createdAt,
+      status: request.status,
+      request
+    })),
+    ...absenceRequests.map((request) => ({
+      id: request.id,
+      kind: 'absence' as const,
+      title: '수업 취소 요청',
+      meta: `${formatSlotBrief(request.startsAt)} · ${request.instructor} 강사`,
+      detail: '',
+      startsAt: request.startsAt,
+      createdAt: request.createdAt,
+      status: request.status,
+      request
+    })),
+    ...assignmentRequests.map((request) => ({
+      id: request.id,
+      kind: 'assignment' as const,
+      title: formatAssignmentRequestType(request.requestType),
+      meta: `${formatSlotBrief(request.startsAt)} · ${request.instructor} 강사`,
+      detail: request.reviewComment ? `관리자 메모: ${request.reviewComment}` : '',
+      startsAt: request.startsAt,
+      createdAt: request.createdAt,
+      status: request.status,
+      request
+    }))
+  ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const visibleRequestItems = showAll ? allRequestItems : allRequestItems.slice(0, 3);
 
-  async function cancelRequest(request: LessonAssignmentRequest) {
+  async function cancelAssignmentRequest(request: LessonAssignmentRequest) {
     if (cancelingId) {
       return;
     }
@@ -1524,46 +2662,432 @@ function MemberAssignmentRequestSummary({
     }
   }
 
+  async function cancelChangeRequest(request: LessonChangeRequest) {
+    if (cancelingId) {
+      return;
+    }
+
+    try {
+      setCancelingId(request.id);
+      await onCancelChangeRequest(request.id);
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '변경 요청을 취소하지 못했습니다.';
+      Alert.alert('취소 실패', message);
+    } finally {
+      setCancelingId(null);
+    }
+  }
+
+  async function cancelAbsenceRequest(request: LessonAbsenceRequest) {
+    if (cancelingId) {
+      return;
+    }
+
+    try {
+      setCancelingId(request.id);
+      await onCancelAbsenceRequest(request.id);
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '수업 취소 요청을 취소하지 못했습니다.';
+      Alert.alert('취소 실패', message);
+    } finally {
+      setCancelingId(null);
+    }
+  }
+
   return (
     <View style={styles.adminOverview}>
       <View style={styles.adminOverviewHeader}>
-        <Text style={styles.adminOverviewTitle}>내 신청 현황</Text>
-        <Text style={styles.adminOverviewCount}>{pendingRequests.length}건 대기</Text>
+        <View style={styles.feedbackCardTitleBlock}>
+          <View style={styles.adminOverviewTitleRow}>
+            <Text style={styles.adminOverviewTitle}>{showAll ? '전체 수업 요청' : '최근 수업 요청'}</Text>
+            <InfoTooltip message="수업 취소, 추가수업, 자유수영 신청 내역입니다." />
+          </View>
+        </View>
+        <Text style={[styles.timelineBadge, pendingCount > 0 ? styles.statusBadgePending : styles.statusBadgeSuccess]}>
+          {pendingCount}건 대기
+        </Text>
       </View>
 
-      {pendingRequests.length === 0 ? (
+      {visibleRequestItems.length === 0 ? (
         <View style={styles.emptyState}>
           <Feather name="check-circle" size={22} color={colors.blue700} />
-          <Text style={styles.emptyStateText}>승인 대기 중인 신청이 없습니다.</Text>
+          <Text style={styles.emptyStateText}>수업 요청 내역이 없습니다.</Text>
         </View>
       ) : (
-        pendingRequests.map((request) => {
-          const canceling = cancelingId === request.id;
+        visibleRequestItems.map((item) => {
+          const canceling = cancelingId === item.id;
+          const pending = item.status === 'pending';
+          const past = isPastDate(item.startsAt);
+          const badgeStyle = pending
+            ? styles.statusBadgePending
+            : item.status === 'approved'
+              ? styles.statusBadgeSuccess
+              : item.status === 'rejected'
+                ? styles.statusBadgeDanger
+                : styles.timelineBadgePast;
+          const cardStyle = pending ? styles.timelineCardPending : past ? styles.timelineCardPast : styles.timelineCardUpcoming;
+          const cancelLabel = item.kind === 'change' ? '변경 취소' : item.kind === 'absence' ? '요청 취소' : '신청 취소';
+          const cancelRequest = () => {
+            if (item.kind === 'change') {
+              void cancelChangeRequest(item.request);
+              return;
+            }
+
+            if (item.kind === 'absence') {
+              void cancelAbsenceRequest(item.request);
+              return;
+            }
+
+            void cancelAssignmentRequest(item.request);
+          };
 
           return (
-            <View key={request.id} style={styles.requestCard}>
-              <Text style={styles.requestTitle}>{formatAssignmentRequestType(request.requestType)} 승인 대기</Text>
-              <Text style={styles.requestMeta}>
-                {formatSlotBrief(request.startsAt)} · {request.instructor} 강사
-              </Text>
-              <Pressable
-                style={[styles.secondaryActionButton, canceling && styles.disabledButton]}
-                onPress={() => cancelRequest(request)}
-                disabled={canceling}
-              >
-                <Feather name="x-circle" size={17} color={colors.blue700} />
-                <Text style={styles.secondaryActionText}>신청 취소</Text>
-              </Pressable>
+            <View key={`${item.kind}-${item.id}`} style={[styles.requestCard, cardStyle]}>
+              <View style={styles.requestCardHeader}>
+                <View style={styles.feedbackCardTitleBlock}>
+                  <Text style={styles.requestTitle}>{item.title}</Text>
+                  <Text style={styles.requestMeta}>{item.meta}</Text>
+                </View>
+                <Text style={[styles.timelineBadge, badgeStyle]}>{formatRequestStatus(item.status)}</Text>
+              </View>
+              {item.detail ? <Text style={styles.requestFootnote}>{item.detail}</Text> : null}
+              <Text style={styles.requestMeta}>{formatNoticeDate(item.createdAt)}</Text>
+              {pending ? (
+                <Pressable
+                  style={[styles.secondaryActionButton, canceling && styles.disabledButton]}
+                  onPress={cancelRequest}
+                  disabled={canceling}
+                >
+                  <Feather name="x-circle" size={17} color={colors.blue700} />
+                  <Text style={styles.secondaryActionText}>{canceling ? '취소중' : cancelLabel}</Text>
+                </Pressable>
+              ) : null}
             </View>
           );
         })
       )}
 
-      {pendingRequests.length === 0 && recentRequest ? (
-        <Text style={styles.requestFootnote}>
-          최근 신청: {formatAssignmentRequestType(recentRequest.requestType)} · {formatRequestStatus(recentRequest.status)} · {formatSlotBrief(recentRequest.startsAt)}
-        </Text>
+      {!showAll && onShowAll ? (
+        <Pressable style={styles.secondaryActionButton} onPress={onShowAll}>
+          <Feather name="list" size={17} color={colors.blue700} />
+          <Text style={styles.secondaryActionText}>전체보기</Text>
+        </Pressable>
       ) : null}
+    </View>
+  );
+}
+
+function MemberRequestOverview({
+  requests,
+  onCreateMemberRequest,
+  onShowAll,
+  showList = false,
+  showComposer = !showList
+}: {
+  requests: MemberRequest[];
+  onCreateMemberRequest: (input: CreateMemberRequestInput) => Promise<void>;
+  onShowAll?: () => void;
+  showList?: boolean;
+  showComposer?: boolean;
+}) {
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const activeCount = requests.filter((request) => request.status === 'pending' || request.status === 'reviewing').length;
+  const visibleRequests = showList ? requests : [];
+
+  async function submitRequest() {
+    if (submitting) {
+      return;
+    }
+
+    const trimmedTitle = title.trim();
+    const trimmedBody = body.trim();
+
+    if (!trimmedTitle || !trimmedBody) {
+      Alert.alert('문의 입력', '제목과 내용을 입력해주세요.');
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      await onCreateMemberRequest({ title: trimmedTitle, body: trimmedBody });
+      setTitle('');
+      setBody('');
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '문의를 등록하지 못했습니다.';
+      Alert.alert('등록 실패', message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <View style={styles.adminOverview}>
+      <View style={styles.adminOverviewHeader}>
+        <View style={styles.feedbackCardTitleBlock}>
+          <Text style={styles.adminOverviewTitle}>{showList ? '문의 접수 내역' : '문의 접수'}</Text>
+          <Text style={styles.requestMeta}>{showList ? '등록한 문의와 관리자 답변' : '관리자에게 전달할 내용을 작성하세요'}</Text>
+        </View>
+        <Text style={[styles.timelineBadge, activeCount > 0 ? styles.statusBadgePending : styles.statusBadgeSuccess]}>
+          {activeCount}건 처리중
+        </Text>
+      </View>
+
+      {showComposer ? (
+        <View style={styles.requestCard}>
+        <TextInput
+          style={styles.input}
+          placeholder="제목"
+          placeholderTextColor={colors.muted}
+          value={title}
+          maxLength={60}
+          onChangeText={setTitle}
+          returnKeyType="next"
+        />
+        <TextInput
+          style={[styles.input, styles.multilineInput]}
+          placeholder="문의하거나 요청할 내용을 입력해주세요"
+          placeholderTextColor={colors.muted}
+          value={body}
+          maxLength={500}
+          multiline
+          textAlignVertical="top"
+          onChangeText={setBody}
+        />
+        <Pressable
+          style={[styles.secondaryActionButton, submitting && styles.disabledButton]}
+          onPress={submitRequest}
+          disabled={submitting}
+        >
+          <Feather name="send" size={17} color={colors.blue700} />
+          <Text style={styles.secondaryActionText}>{submitting ? '등록중' : '문의 보내기'}</Text>
+        </Pressable>
+        {onShowAll ? (
+          <Pressable style={styles.secondaryActionButton} onPress={onShowAll}>
+            <Feather name="list" size={17} color={colors.blue700} />
+            <Text style={styles.secondaryActionText}>전체보기</Text>
+          </Pressable>
+        ) : null}
+      </View>
+      ) : null}
+
+      {showList && visibleRequests.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Feather name="message-square" size={22} color={colors.blue700} />
+          <Text style={styles.emptyStateText}>등록한 문의가 없습니다.</Text>
+        </View>
+      ) : null}
+
+      {showList ? (
+        visibleRequests.map((request) => (
+          <View key={request.id} style={[styles.requestCard, request.status === 'pending' || request.status === 'reviewing' ? styles.timelineCardPending : styles.timelineCardPast]}>
+            <View style={styles.requestCardHeader}>
+              <View style={styles.feedbackCardTitleBlock}>
+                <Text style={styles.requestTitle}>{request.title}</Text>
+                <Text style={styles.requestMeta}>{formatNoticeDate(request.createdAt)}</Text>
+              </View>
+              <Text
+                style={[
+                  styles.timelineBadge,
+                  request.status === 'pending' || request.status === 'reviewing'
+                    ? styles.statusBadgePending
+                    : request.status === 'resolved'
+                      ? styles.statusBadgeSuccess
+                      : styles.statusBadgeDanger
+                ]}
+              >
+                {formatMemberRequestStatus(request.status)}
+              </Text>
+            </View>
+            <Text style={styles.feedbackBody}>{request.body}</Text>
+            {request.adminReply ? <Text style={styles.requestFootnote}>관리자 답변: {request.adminReply}</Text> : null}
+          </View>
+        ))
+      ) : null}
+    </View>
+  );
+}
+
+function MemberStoreOverview({
+  products,
+  orders,
+  onCreateStoreOrder,
+  onShowOrders
+}: {
+  products: StoreProduct[];
+  orders: StoreOrder[];
+  onCreateStoreOrder: (productId: string, quantity: number) => Promise<void>;
+  onShowOrders: () => void;
+}) {
+  const [quantityByProduct, setQuantityByProduct] = useState<Record<string, string>>({});
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const visibleProducts = products.filter((product) => product.isActive);
+  const pendingOrderCount = orders.filter((order) => order.status === 'pending').length;
+
+  function getQuantity(productId: string) {
+    const rawValue = quantityByProduct[productId] ?? '1';
+    const parsed = Number(rawValue.replace(/[^\d]/g, ''));
+
+    return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 99) : 1;
+  }
+
+  async function buyProduct(product: StoreProduct) {
+    if (busyId) {
+      return;
+    }
+
+    const quantity = getQuantity(product.id);
+
+    try {
+      setBusyId(product.id);
+      await onCreateStoreOrder(product.id, quantity);
+      setQuantityByProduct((current) => ({ ...current, [product.id]: '1' }));
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '구매 신청을 등록하지 못했습니다.';
+      Alert.alert('구매 실패', message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <View style={styles.adminOverview}>
+      <View style={styles.adminOverviewHeader}>
+        <View style={styles.feedbackCardTitleBlock}>
+          <View style={styles.adminOverviewTitleRow}>
+            <Text style={styles.adminOverviewTitle}>수영용품 구매</Text>
+            <InfoTooltip message="구매 신청 후 관리자가 확정하면 내 구매 신청에서 상태를 확인할 수 있습니다." />
+          </View>
+        </View>
+        <Text style={[styles.timelineBadge, pendingOrderCount > 0 ? styles.statusBadgePending : styles.statusBadgeSuccess]}>
+          {pendingOrderCount}건 대기
+        </Text>
+      </View>
+
+      <Pressable style={styles.secondaryActionButton} onPress={onShowOrders}>
+        <Feather name="shopping-bag" size={17} color={colors.blue700} />
+        <Text style={styles.secondaryActionText}>내 구매 신청</Text>
+      </Pressable>
+
+      {visibleProducts.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Feather name="shopping-bag" size={22} color={colors.blue700} />
+          <Text style={styles.emptyStateText}>판매 중인 상품이 없습니다.</Text>
+        </View>
+      ) : (
+        visibleProducts.map((product) => {
+          const busy = busyId === product.id;
+          const soldOut = product.stockQuantity <= 0;
+
+          return (
+            <View key={product.id} style={styles.requestCard}>
+              {product.imageUri ? <Image source={{ uri: product.imageUri }} style={styles.storeProductImage} resizeMode="cover" /> : null}
+              <View style={styles.requestCardHeader}>
+                <Text style={styles.requestTitle}>{product.name}</Text>
+                <Text style={styles.requestMeta}>{formatWon(product.price)}</Text>
+              </View>
+              {product.description ? <Text style={styles.feedbackBody}>{product.description}</Text> : null}
+              <Text style={styles.requestMeta}>재고 {product.stockQuantity}개</Text>
+              <TextInput
+                style={[styles.input, styles.storeQuantityInput]}
+                value={quantityByProduct[product.id] ?? '1'}
+                onChangeText={(value) => setQuantityByProduct((current) => ({ ...current, [product.id]: value.replace(/[^\d]/g, '') }))}
+                keyboardType="number-pad"
+                placeholder="수량"
+                placeholderTextColor={colors.muted}
+                maxLength={2}
+              />
+              <Pressable
+                style={[styles.secondaryActionButton, (busy || soldOut) && styles.disabledButton]}
+                onPress={() => buyProduct(product)}
+                disabled={busy || soldOut}
+              >
+                <Feather name="shopping-cart" size={17} color={colors.blue700} />
+                <Text style={styles.secondaryActionText}>{soldOut ? '품절' : busy ? '신청중' : '구매 신청'}</Text>
+              </Pressable>
+            </View>
+          );
+        })
+      )}
+    </View>
+  );
+}
+
+function MemberStoreOrderOverview({
+  orders,
+  onCancelStoreOrder
+}: {
+  orders: StoreOrder[];
+  onCancelStoreOrder: (orderId: string) => Promise<void>;
+}) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  async function cancelOrder(order: StoreOrder) {
+    if (busyId) {
+      return;
+    }
+
+    try {
+      setBusyId(order.id);
+      await onCancelStoreOrder(order.id);
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '구매 신청을 취소하지 못했습니다.';
+      Alert.alert('취소 실패', message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <View style={styles.adminOverview}>
+      <View style={styles.adminOverviewHeader}>
+        <Text style={styles.adminOverviewTitle}>내 구매 신청</Text>
+        <Text style={styles.adminOverviewCount}>{orders.length}건</Text>
+      </View>
+
+      {orders.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Feather name="shopping-bag" size={22} color={colors.blue700} />
+          <Text style={styles.emptyStateText}>구매 신청 내역이 없습니다.</Text>
+        </View>
+      ) : (
+        orders.map((order) => {
+          const pending = order.status === 'pending';
+          const busy = busyId === order.id;
+          const badgeStyle = pending
+            ? styles.statusBadgePending
+            : order.status === 'confirmed'
+              ? styles.statusBadgeSuccess
+              : styles.statusBadgeDanger;
+
+          return (
+            <View key={order.id} style={[styles.requestCard, pending ? styles.timelineCardPending : styles.timelineCardPast]}>
+              <View style={styles.requestCardHeader}>
+                <View style={styles.feedbackCardTitleBlock}>
+                  <Text style={styles.requestTitle}>{order.productName}</Text>
+                  <Text style={styles.requestMeta}>{formatNoticeDate(order.createdAt)}</Text>
+                </View>
+                <Text style={[styles.timelineBadge, badgeStyle]}>{formatStoreOrderStatus(order.status)}</Text>
+              </View>
+              <Text style={styles.requestMeta}>
+                {order.quantity}개 · {formatWon(order.totalPrice)}
+              </Text>
+              {order.adminComment ? <Text style={styles.requestFootnote}>관리자 메모: {order.adminComment}</Text> : null}
+              {pending ? (
+                <Pressable
+                  style={[styles.secondaryActionButton, busy && styles.disabledButton]}
+                  onPress={() => cancelOrder(order)}
+                  disabled={busy}
+                >
+                  <Feather name="x-circle" size={17} color={colors.blue700} />
+                  <Text style={styles.secondaryActionText}>{busy ? '취소중' : '구매 신청 취소'}</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          );
+        })
+      )}
     </View>
   );
 }
@@ -1585,7 +3109,7 @@ function MemberLessonFeedbackOverview({ feedbacks }: { feedbacks: LessonFeedback
         </View>
       ) : (
         visibleFeedbacks.map((feedback) => (
-          <View key={feedback.id} style={styles.feedbackCard}>
+          <View key={feedback.id} style={[styles.feedbackCard, styles.timelineCardPast]}>
             <View style={styles.feedbackCardHeader}>
               <View style={styles.feedbackCardTitleBlock}>
                 <Text style={styles.requestTitle}>{formatSlotBrief(feedback.startsAt)}</Text>
@@ -1621,16 +3145,22 @@ function LessonFeedbackMediaPreview({
     return <Image source={{ uri }} style={[styles.feedbackImage, compact && styles.feedbackImageCompact]} resizeMode="cover" />;
   }
 
+  return <FeedbackVideoPlayer uri={uri} compact={compact} />;
+}
+
+function FeedbackVideoPlayer({ uri, compact = false }: { uri: string; compact?: boolean }) {
+  const player = useVideoPlayer(uri);
+
   return (
-    <Pressable
-      style={[styles.feedbackVideoButton, compact && styles.feedbackVideoButtonCompact]}
-      onPress={() => openFeedbackMedia(uri)}
-      accessibilityRole="button"
-      accessibilityLabel="피드백 동영상 보기"
-    >
-      <Feather name="play-circle" size={compact ? 18 : 22} color={colors.white} />
-      <Text style={styles.feedbackVideoText}>동영상 보기</Text>
-    </Pressable>
+    <View style={[styles.feedbackVideoFrame, compact && styles.feedbackVideoFrameCompact]}>
+      <VideoView
+        style={styles.feedbackVideo}
+        player={player}
+        nativeControls
+        contentFit="contain"
+        fullscreenOptions={{ enable: true }}
+      />
+    </View>
   );
 }
 
@@ -1645,7 +3175,13 @@ function MemberSpecialLessonOverview({
 }) {
   const [applyingId, setApplyingId] = useState<string | null>(null);
   const [cancelingId, setCancelingId] = useState<string | null>(null);
-  const visibleLessons = specialLessons.slice(0, 5);
+  const [lessonViewMode, setLessonViewMode] = useState<'upcoming' | 'past'>('upcoming');
+  const now = Date.now();
+  const upcomingLessons = specialLessons.filter((lesson) => new Date(lesson.startsAt).getTime() >= now);
+  const pastLessons = specialLessons.filter((lesson) => new Date(lesson.startsAt).getTime() < now);
+  const visibleLessons = lessonViewMode === 'upcoming' ? upcomingLessons : pastLessons;
+  const selectedLessonLabel = lessonViewMode === 'upcoming' ? '예정' : '지난';
+  const emptyLessonMessage = lessonViewMode === 'upcoming' ? '예정된 특별수업이 없습니다.' : '지난 특별수업이 없습니다.';
 
   async function applyLesson(lesson: SpecialLesson) {
     if (applyingId) {
@@ -1697,19 +3233,45 @@ function MemberSpecialLessonOverview({
     <View style={styles.adminOverview}>
       <View style={styles.adminOverviewHeader}>
         <Text style={styles.adminOverviewTitle}>특별수업</Text>
-        <Text style={styles.adminOverviewCount}>{specialLessons.length}개</Text>
+        <Text style={styles.adminOverviewCount}>
+          {selectedLessonLabel} {visibleLessons.length}개
+        </Text>
+      </View>
+
+      <View style={styles.specialLessonFilterRow}>
+        {[
+          { id: 'upcoming' as const, label: '예정', count: upcomingLessons.length },
+          { id: 'past' as const, label: '지난', count: pastLessons.length }
+        ].map((filter) => {
+          const selected = lessonViewMode === filter.id;
+
+          return (
+            <Pressable
+              key={filter.id}
+              style={[styles.specialLessonFilterButton, selected && styles.specialLessonFilterButtonActive]}
+              onPress={() => setLessonViewMode(filter.id)}
+              accessibilityRole="button"
+            >
+              <Text style={[styles.specialLessonFilterText, selected && styles.specialLessonFilterTextActive]}>
+                {filter.label} {filter.count}
+              </Text>
+            </Pressable>
+          );
+        })}
       </View>
 
       {visibleLessons.length === 0 ? (
         <View style={styles.emptyState}>
           <Feather name="star" size={22} color={colors.blue700} />
-          <Text style={styles.emptyStateText}>모집 중인 특별수업이 없습니다.</Text>
+          <Text style={styles.emptyStateText}>{emptyLessonMessage}</Text>
         </View>
       ) : (
         visibleLessons.map((lesson) => {
           const applied = Boolean(lesson.myRegistrationId);
-          const canCancel = lesson.myStatus === 'pending' || lesson.myStatus === 'waitlisted';
-          const statusText = formatSpecialLessonStatus(lesson.myStatus);
+          const lessonStarted = new Date(lesson.startsAt).getTime() <= Date.now();
+          const canCancel = !lessonStarted && (lesson.myStatus === 'pending' || lesson.myStatus === 'waitlisted');
+          const canApply = !applied && !lessonStarted;
+          const statusText = lessonStarted ? '지난 수업' : formatSpecialLessonStatus(lesson.myStatus);
           const queueText = lesson.myQueuePosition
             ? `선착순 ${lesson.myQueuePosition}번 · ${lesson.myQueuePosition <= lesson.capacity ? '정원 안' : '대기'}`
             : `${lesson.approvedCount}/${lesson.capacity}명 확정`;
@@ -1718,7 +3280,7 @@ function MemberSpecialLessonOverview({
           const busy = applying || canceling;
 
           return (
-            <View key={lesson.id} style={styles.requestCard}>
+            <View key={lesson.id} style={[styles.requestCard, lessonStarted ? styles.timelineCardPast : styles.timelineCardUpcoming]}>
               {lesson.imageUri ? (
                 <Image source={{ uri: lesson.imageUri }} style={styles.specialLessonPoster} resizeMode="cover" />
               ) : null}
@@ -1729,7 +3291,18 @@ function MemberSpecialLessonOverview({
                     {formatSlotBrief(lesson.startsAt)} · {lesson.instructor || '담당 강사 미정'}
                   </Text>
                 </View>
-                <Text style={[styles.specialStatusBadge, lesson.myStatus === 'approved' && styles.specialStatusBadgeApproved]}>
+                <Text
+                  style={[
+                    styles.timelineBadge,
+                    lessonStarted
+                      ? styles.timelineBadgePast
+                      : lesson.myStatus === 'approved'
+                        ? styles.statusBadgeSuccess
+                        : lesson.myStatus === 'pending' || lesson.myStatus === 'waitlisted'
+                          ? styles.statusBadgePending
+                          : styles.timelineBadgeUpcoming
+                  ]}
+                >
                   {statusText}
                 </Text>
               </View>
@@ -1746,7 +3319,7 @@ function MemberSpecialLessonOverview({
                   <Feather name="x-circle" size={17} color={colors.blue700} />
                   <Text style={styles.secondaryActionText}>신청 취소</Text>
                 </Pressable>
-              ) : !applied ? (
+              ) : canApply ? (
                 <Pressable
                   style={[styles.secondaryActionButton, busy && styles.disabledButton]}
                   onPress={() => applyLesson(lesson)}
@@ -1764,137 +3337,21 @@ function MemberSpecialLessonOverview({
   );
 }
 
-function LessonChangeRequestPanel({
-  nextClass,
-  openSlots,
-  pendingRequest,
-  recentRequest,
-  onCreateChangeRequest,
-  onCancelChangeRequest
-}: {
-  nextClass?: ClassSlot;
-  openSlots: ClassSlot[];
-  pendingRequest?: LessonChangeRequest;
-  recentRequest?: LessonChangeRequest;
-  onCreateChangeRequest: (targetSlotId: string) => Promise<void>;
-  onCancelChangeRequest: (requestId: string) => Promise<void>;
-}) {
-  const [submittingSlotId, setSubmittingSlotId] = useState<string | null>(null);
-  const [canceling, setCanceling] = useState(false);
-  const requestableSlots = openSlots.filter((slot) => slot.id !== nextClass?.id).slice(0, 3);
-
-  async function requestChange(slot: ClassSlot) {
-    if (submittingSlotId) {
-      return;
-    }
-
-    Alert.alert('변경 요청', `${formatSlotBrief(nextClass?.startsAt)} 수업을 ${formatSlotBrief(slot.startsAt)} 수업으로 변경 요청할까요?`, [
-      { text: '취소', style: 'cancel' },
-      {
-        text: '요청',
-        onPress: async () => {
-          try {
-            setSubmittingSlotId(slot.id);
-            await onCreateChangeRequest(slot.id);
-            Alert.alert('요청 완료', '관리자 승인 후 변경이 확정됩니다.');
-          } catch (error) {
-            const message = error instanceof DatabaseError ? error.message : '변경 요청을 만들지 못했습니다.';
-            Alert.alert('요청 실패', message);
-          } finally {
-            setSubmittingSlotId(null);
-          }
-        }
-      }
-    ]);
-  }
-
-  async function cancelRequest() {
-    if (!pendingRequest || canceling) {
-      return;
-    }
-
-    try {
-      setCanceling(true);
-      await onCancelChangeRequest(pendingRequest.id);
-    } catch (error) {
-      const message = error instanceof DatabaseError ? error.message : '변경 요청을 취소하지 못했습니다.';
-      Alert.alert('취소 실패', message);
-    } finally {
-      setCanceling(false);
-    }
-  }
-
-  return (
-    <View style={styles.adminOverview}>
-      <View style={styles.adminOverviewHeader}>
-        <Text style={styles.adminOverviewTitle}>다음 수업 변경 요청</Text>
-        <Text style={styles.adminOverviewCount}>{pendingRequest ? '대기중' : `${requestableSlots.length}개`}</Text>
-      </View>
-
-      {!nextClass ? (
-        <View style={styles.emptyState}>
-          <Feather name="clock" size={22} color={colors.blue700} />
-          <Text style={styles.emptyStateText}>변경 요청할 다음 고정수업이 없습니다.</Text>
-        </View>
-      ) : pendingRequest ? (
-        <View style={styles.requestCard}>
-          <Text style={styles.requestTitle}>승인 대기</Text>
-          <Text style={styles.requestMeta}>
-            {formatSlotBrief(pendingRequest.sourceStartsAt)} → {formatSlotBrief(pendingRequest.targetStartsAt)}
-          </Text>
-          <Pressable style={[styles.secondaryActionButton, canceling && styles.disabledButton]} onPress={cancelRequest} disabled={canceling}>
-            <Feather name="x-circle" size={17} color={colors.blue700} />
-            <Text style={styles.secondaryActionText}>요청 취소</Text>
-          </Pressable>
-        </View>
-      ) : requestableSlots.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Feather name="unlock" size={22} color={colors.blue700} />
-          <Text style={styles.emptyStateText}>변경 요청 가능한 빈자리가 없습니다.</Text>
-        </View>
-      ) : (
-        requestableSlots.map((slot) => (
-          <View key={slot.id} style={styles.adminReservationRow}>
-            <View style={styles.adminReservationTime}>
-              <Text style={styles.adminReservationDay}>{slot.shortDateLabel}</Text>
-              <Text style={styles.adminReservationHour}>{formatSlotHour(slot.startsAt)}</Text>
-            </View>
-            <View style={styles.adminReservationCopy}>
-              <Text style={styles.adminReservationName}>{slot.instructor} 강사</Text>
-              <Text style={styles.adminReservationMeta}>빈자리 {slot.openSeatCount}개</Text>
-            </View>
-            <Pressable
-              style={[styles.memberAdjustButton, submittingSlotId === slot.id && styles.disabledButton]}
-              onPress={() => requestChange(slot)}
-              disabled={Boolean(submittingSlotId)}
-              accessibilityLabel="변경 요청"
-              accessibilityRole="button"
-            >
-              <Text style={styles.memberAdjustButtonText}>요청</Text>
-            </Pressable>
-          </View>
-        ))
-      )}
-
-      {!pendingRequest && recentRequest ? (
-        <Text style={styles.requestFootnote}>
-          최근 요청: {formatRequestStatus(recentRequest.status)} · {formatSlotBrief(recentRequest.targetStartsAt)}
-        </Text>
-      ) : null}
-    </View>
-  );
-}
-
 function AdminHomeScreen({
   slots,
   members,
   notices,
   openSlots,
   changeRequests,
+  absenceRequests,
   assignmentRequests,
   lessonFeedbackTargets,
+  instructorLessonTimes,
   specialLessons,
   specialLessonRegistrations,
+  memberRequests,
+  storeProducts,
+  storeOrders,
   onAdjustMemberPass,
   onUpdateMemberPassProduct,
   onSaveFixedLesson,
@@ -1905,11 +3362,18 @@ function AdminHomeScreen({
   onAssignLessonReservation,
   onCancelLessonReservation,
   onCancelLessonSlot,
+  onSaveInstructorLessonTime,
+  onCancelInstructorLessonTime,
   onReviewChangeRequest,
+  onReviewAbsenceRequest,
   onReviewAssignmentRequest,
   onPublishLessonFeedback,
   onCreateSpecialLesson,
+  onUpdateSpecialLesson,
   onReviewSpecialLessonRegistration,
+  onReviewMemberRequest,
+  onCreateStoreProduct,
+  onReviewStoreOrder,
   onNoticePress
 }: {
   slots: ClassSlot[];
@@ -1917,10 +3381,15 @@ function AdminHomeScreen({
   notices: Notice[];
   openSlots: ClassSlot[];
   changeRequests: LessonChangeRequest[];
+  absenceRequests: LessonAbsenceRequest[];
   assignmentRequests: LessonAssignmentRequest[];
   lessonFeedbackTargets: LessonFeedbackTarget[];
+  instructorLessonTimes: InstructorLessonTime[];
   specialLessons: SpecialLesson[];
   specialLessonRegistrations: SpecialLessonRegistration[];
+  memberRequests: MemberRequest[];
+  storeProducts: StoreProduct[];
+  storeOrders: StoreOrder[];
   onAdjustMemberPass: (memberId: string, amount: number) => Promise<void>;
   onUpdateMemberPassProduct: (memberId: string, lessonCapacity: number) => Promise<void>;
   onSaveFixedLesson: (
@@ -1928,28 +3397,52 @@ function AdminHomeScreen({
     weekday: number,
     hour: number,
     minute: number,
+    durationMinutes: number,
     fixedLessonId?: string | null
   ) => Promise<void>;
   onCancelFixedLesson: (fixedLessonId: string) => Promise<void>;
   onUpdateLessonInstructor: (slotId: string, instructor: string) => Promise<void>;
   onCreateLessonSlot: (slotDate: string, hour: number, minute: number, instructor: string, durationMinutes: number) => Promise<void>;
   onUpdateLessonSlot: (slotId: string, instructor: string, durationMinutes: number, capacity: number) => Promise<void>;
-  onAssignLessonReservation: (slotId: string, memberId: string) => Promise<void>;
+  onAssignLessonReservation: (slotId: string, memberId: string, durationMinutes: number) => Promise<void>;
   onCancelLessonReservation: (slotId: string, memberId: string) => Promise<void>;
   onCancelLessonSlot: (slotId: string) => Promise<void>;
+  onSaveInstructorLessonTime: (input: SaveInstructorLessonTimeInput) => Promise<void>;
+  onCancelInstructorLessonTime: (timeId: string) => Promise<void>;
   onReviewChangeRequest: (requestId: string, approved: boolean) => Promise<void>;
-  onReviewAssignmentRequest: (requestId: string, approved: boolean) => Promise<void>;
+  onReviewAbsenceRequest: (requestId: string, approved: boolean) => Promise<void>;
+  onReviewAssignmentRequest: (requestId: string, approved: boolean, comment?: string) => Promise<void>;
   onPublishLessonFeedback: (input: PublishLessonFeedbackInput) => Promise<void>;
   onCreateSpecialLesson: (input: CreateSpecialLessonInput) => Promise<void>;
+  onUpdateSpecialLesson: (input: UpdateSpecialLessonInput) => Promise<void>;
   onReviewSpecialLessonRegistration: (registrationId: string, approved: boolean) => Promise<void>;
+  onReviewMemberRequest: (requestId: string, status: MemberRequestStatus, reply?: string) => Promise<void>;
+  onCreateStoreProduct: (input: CreateStoreProductInput) => Promise<void>;
+  onReviewStoreOrder: (orderId: string, approved: boolean, comment?: string) => Promise<void>;
   onNoticePress: () => void;
 }) {
+  const [selectedSection, setSelectedSection] = useState<AdminHomeSection>('requests');
   const fixedLessonCount = members.reduce((count, member) => count + member.fixedLessonCount, 0);
   const openSeatTotal = openSlots.reduce((count, slot) => count + slot.openSeatCount, 0);
   const substituteCount = slots.reduce((count, slot) => count + slot.substitutes.length, 0);
+  const pendingAbsenceCount = absenceRequests.filter((request) => request.status === 'pending').length;
+  const pendingAssignmentCount = assignmentRequests.filter((request) => request.status === 'pending').length;
+  const pendingChangeCount = changeRequests.filter((request) => request.status === 'pending').length;
+  const pendingMemberRequestCount = memberRequests.filter((request) => request.status === 'pending' || request.status === 'reviewing').length;
+  const pendingRequestTotal = pendingAbsenceCount + pendingAssignmentCount + pendingChangeCount + pendingMemberRequestCount;
+  const pendingSpecialRegistrationCount = specialLessonRegistrations.filter((registration) => registration.status === 'pending' || registration.status === 'waitlisted').length;
+  const pendingFeedbackCount = lessonFeedbackTargets.filter((target) => !target.feedbackId).length;
+  const pendingStoreOrderCount = storeOrders.filter((order) => order.status === 'pending').length;
+  const adminMenuOptions: Array<HomeMenuOption<AdminHomeSection>> = [
+    { id: 'requests', label: '승인 요청', description: '취소·신청·문의', icon: 'inbox', count: pendingRequestTotal },
+    { id: 'members', label: '회원 관리', description: '회원권·고정수업', icon: 'users', count: members.length },
+    { id: 'instructors', label: '강사', description: '요일·시간 배정', icon: 'briefcase', count: new Set(instructorLessonTimes.map((time) => time.instructor)).size },
+    { id: 'content', label: '콘텐츠', description: '특별수업·피드백', icon: 'edit-3', count: pendingSpecialRegistrationCount + pendingFeedbackCount },
+    { id: 'store', label: '상품 판매', description: '상품·구매 확정', icon: 'shopping-bag', count: pendingStoreOrderCount }
+  ];
 
   return (
-    <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+    <KeyboardAwareScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
       <View style={styles.summaryStrip}>
         <View style={styles.summaryItem}>
           <Text style={styles.summaryValue}>{members.length}</Text>
@@ -1969,39 +3462,393 @@ function AdminHomeScreen({
         </View>
       </View>
 
-      <AdminChangeRequestOverview requests={changeRequests} onReviewChangeRequest={onReviewChangeRequest} />
-      <AdminAssignmentRequestOverview requests={assignmentRequests} onReviewAssignmentRequest={onReviewAssignmentRequest} />
-      <AdminSpecialLessonOverview
-        specialLessons={specialLessons}
-        registrations={specialLessonRegistrations}
-        onCreateSpecialLesson={onCreateSpecialLesson}
-        onReviewSpecialLessonRegistration={onReviewSpecialLessonRegistration}
-      />
-      <AdminLessonFeedbackOverview targets={lessonFeedbackTargets} onPublishLessonFeedback={onPublishLessonFeedback} />
-      <AdminScheduleOverview
-        slots={slots}
-        members={members}
-        onCreateLessonSlot={onCreateLessonSlot}
-        onUpdateLessonSlot={onUpdateLessonSlot}
-        onAssignLessonReservation={onAssignLessonReservation}
-        onCancelLessonReservation={onCancelLessonReservation}
-        onCancelLessonSlot={onCancelLessonSlot}
-        onUpdateLessonInstructor={onUpdateLessonInstructor}
-      />
-      <AdminMemberOverview
-        slots={slots}
-        members={members}
-        onAdjustMemberPass={onAdjustMemberPass}
-        onUpdateMemberPassProduct={onUpdateMemberPassProduct}
-        onSaveFixedLesson={onSaveFixedLesson}
-        onCancelFixedLesson={onCancelFixedLesson}
-      />
+      <HomeSectionMenu options={adminMenuOptions} selectedId={selectedSection} onSelect={setSelectedSection} />
 
-      <SectionHeader title="최근 공지" actionLabel="전체" onAction={onNoticePress} />
-      {notices.slice(0, 1).map((notice) => (
-        <NoticeCard key={notice.id} notice={notice} compact />
-      ))}
-    </ScrollView>
+      {selectedSection === 'requests' ? (
+        pendingRequestTotal > 0 ? (
+          <>
+            {pendingAbsenceCount > 0 ? <AdminAbsenceRequestOverview requests={absenceRequests} onReviewAbsenceRequest={onReviewAbsenceRequest} /> : null}
+            {pendingAssignmentCount > 0 ? <AdminAssignmentRequestOverview requests={assignmentRequests} onReviewAssignmentRequest={onReviewAssignmentRequest} /> : null}
+            {pendingChangeCount > 0 ? <AdminChangeRequestOverview requests={changeRequests} onReviewChangeRequest={onReviewChangeRequest} /> : null}
+            {pendingMemberRequestCount > 0 ? <AdminMemberRequestOverview requests={memberRequests} onReviewMemberRequest={onReviewMemberRequest} /> : null}
+          </>
+        ) : (
+          <HomeEmptyPanel icon="check-circle" message="처리할 요청이 없습니다." />
+        )
+      ) : null}
+
+      {selectedSection === 'members' ? (
+        <AdminMemberOverview
+          slots={slots}
+          members={members}
+          onAdjustMemberPass={onAdjustMemberPass}
+          onUpdateMemberPassProduct={onUpdateMemberPassProduct}
+          onSaveFixedLesson={onSaveFixedLesson}
+          onCancelFixedLesson={onCancelFixedLesson}
+        />
+      ) : null}
+
+      {selectedSection === 'instructors' ? (
+        <AdminInstructorOverview
+          slots={slots}
+          instructorLessonTimes={instructorLessonTimes}
+          onSaveInstructorLessonTime={onSaveInstructorLessonTime}
+          onCancelInstructorLessonTime={onCancelInstructorLessonTime}
+        />
+      ) : null}
+
+      {selectedSection === 'content' ? (
+        <>
+          <AdminSpecialLessonOverview
+            specialLessons={specialLessons}
+            registrations={specialLessonRegistrations}
+            onCreateSpecialLesson={onCreateSpecialLesson}
+            onUpdateSpecialLesson={onUpdateSpecialLesson}
+            onReviewSpecialLessonRegistration={onReviewSpecialLessonRegistration}
+          />
+          <AdminLessonFeedbackOverview targets={lessonFeedbackTargets} onPublishLessonFeedback={onPublishLessonFeedback} />
+          <SectionHeader title="최근 공지" actionLabel="전체" onAction={onNoticePress} />
+          {notices.length > 0 ? (
+            notices.slice(0, 1).map((notice) => <NoticeCard key={notice.id} notice={notice} compact />)
+          ) : (
+            <HomeEmptyPanel icon="bell" message="등록된 공지가 없습니다." />
+          )}
+        </>
+      ) : null}
+
+      {selectedSection === 'store' ? (
+        <AdminStoreOverview
+          products={storeProducts}
+          orders={storeOrders}
+          onCreateStoreProduct={onCreateStoreProduct}
+          onReviewStoreOrder={onReviewStoreOrder}
+        />
+      ) : null}
+    </KeyboardAwareScrollView>
+  );
+}
+
+function AdminMemberRequestOverview({
+  requests,
+  onReviewMemberRequest
+}: {
+  requests: MemberRequest[];
+  onReviewMemberRequest: (requestId: string, status: MemberRequestStatus, reply?: string) => Promise<void>;
+}) {
+  const [replyByRequest, setReplyByRequest] = useState<Record<string, string>>({});
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const pendingRequests = requests.filter((request) => request.status === 'pending' || request.status === 'reviewing');
+  const recentRequest = requests.find((request) => request.status === 'resolved' || request.status === 'rejected');
+
+  async function review(request: MemberRequest, status: MemberRequestStatus) {
+    if (reviewingId) {
+      return;
+    }
+
+    try {
+      setReviewingId(request.id);
+      await onReviewMemberRequest(request.id, status, replyByRequest[request.id]?.trim() ?? '');
+      setReplyByRequest((current) => ({ ...current, [request.id]: '' }));
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '요구사항을 처리하지 못했습니다.';
+      Alert.alert('처리 실패', message);
+    } finally {
+      setReviewingId(null);
+    }
+  }
+
+  return (
+    <View style={styles.adminOverview}>
+      <View style={styles.adminOverviewHeader}>
+        <Text style={styles.adminOverviewTitle}>회원 요구사항</Text>
+        <Text style={styles.adminOverviewCount}>{pendingRequests.length}건</Text>
+      </View>
+
+      {pendingRequests.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Feather name="message-square" size={22} color={colors.blue700} />
+          <Text style={styles.emptyStateText}>처리할 회원 요구사항이 없습니다.</Text>
+        </View>
+      ) : (
+        pendingRequests.map((request) => {
+          const reviewing = reviewingId === request.id;
+
+          return (
+            <View key={request.id} style={styles.requestCard}>
+              <View style={styles.requestCardHeader}>
+                <View style={styles.feedbackCardTitleBlock}>
+                  <Text style={styles.requestTitle}>{request.title}</Text>
+                  <Text style={styles.requestMeta}>
+                    {request.userName} · {formatNoticeDate(request.createdAt)}
+                  </Text>
+                </View>
+                <Text style={styles.specialStatusBadge}>{formatMemberRequestStatus(request.status)}</Text>
+              </View>
+              <Text style={styles.feedbackBody}>{request.body}</Text>
+              <TextInput
+                style={[styles.input, styles.reviewCommentInput]}
+                value={replyByRequest[request.id] ?? ''}
+                onChangeText={(value) => setReplyByRequest((current) => ({ ...current, [request.id]: value }))}
+                placeholder="답변 메모"
+                placeholderTextColor={colors.muted}
+                maxLength={200}
+              />
+              <View style={styles.requestActions}>
+                <Pressable
+                  style={[styles.requestRejectButton, reviewing && styles.disabledButton]}
+                  onPress={() => review(request, 'rejected')}
+                  disabled={reviewing}
+                >
+                  <Feather name="x" size={16} color={colors.danger} />
+                  <Text style={styles.requestRejectText}>거절</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.requestNeutralButton, reviewing && styles.disabledButton]}
+                  onPress={() => review(request, 'reviewing')}
+                  disabled={reviewing}
+                >
+                  <Feather name="clock" size={16} color={colors.blue700} />
+                  <Text style={styles.secondaryActionText}>처리중</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.requestApproveButton, reviewing && styles.disabledButton]}
+                  onPress={() => review(request, 'resolved')}
+                  disabled={reviewing}
+                >
+                  <Feather name="check" size={16} color={colors.white} />
+                  <Text style={styles.requestApproveText}>해결</Text>
+                </Pressable>
+              </View>
+            </View>
+          );
+        })
+      )}
+
+      {pendingRequests.length === 0 && recentRequest ? (
+        <Text style={styles.requestFootnote}>
+          최근 처리: {recentRequest.userName} · {formatMemberRequestStatus(recentRequest.status)}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+function AdminStoreOverview({
+  products,
+  orders,
+  onCreateStoreProduct,
+  onReviewStoreOrder
+}: {
+  products: StoreProduct[];
+  orders: StoreOrder[];
+  onCreateStoreProduct: (input: CreateStoreProductInput) => Promise<void>;
+  onReviewStoreOrder: (orderId: string, approved: boolean, comment?: string) => Promise<void>;
+}) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [imageUri, setImageUri] = useState<string | undefined>();
+  const [price, setPrice] = useState('');
+  const [stockQuantity, setStockQuantity] = useState('');
+  const [commentByOrder, setCommentByOrder] = useState<Record<string, string>>({});
+  const [creating, setCreating] = useState(false);
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const pendingOrders = orders.filter((order) => order.status === 'pending');
+  const visibleProducts = products.slice(0, 4);
+
+  async function createProduct() {
+    if (creating) {
+      return;
+    }
+
+    const trimmedName = name.trim();
+    const nextPrice = Number(price.replace(/[^\d]/g, ''));
+    const nextStock = Number(stockQuantity.replace(/[^\d]/g, ''));
+
+    if (!trimmedName || !Number.isFinite(nextPrice) || !Number.isFinite(nextStock)) {
+      Alert.alert('상품 입력', '상품명, 가격, 재고를 입력해주세요.');
+      return;
+    }
+
+    try {
+      setCreating(true);
+      await onCreateStoreProduct({
+        name: trimmedName,
+        description: description.trim(),
+        imageUri,
+        price: nextPrice,
+        stockQuantity: nextStock
+      });
+      setName('');
+      setDescription('');
+      setImageUri(undefined);
+      setPrice('');
+      setStockQuantity('');
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '상품을 등록하지 못했습니다.';
+      Alert.alert('등록 실패', message);
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function pickStoreProductImage() {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (!permission.granted) {
+      Alert.alert('사진 접근 권한이 필요합니다.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.86
+    });
+
+    if (!result.canceled) {
+      setImageUri(result.assets[0]?.uri);
+    }
+  }
+
+  async function reviewOrder(order: StoreOrder, approved: boolean) {
+    if (reviewingId) {
+      return;
+    }
+
+    try {
+      setReviewingId(order.id);
+      await onReviewStoreOrder(order.id, approved, commentByOrder[order.id]?.trim() ?? '');
+      setCommentByOrder((current) => ({ ...current, [order.id]: '' }));
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '구매 신청을 처리하지 못했습니다.';
+      Alert.alert('처리 실패', message);
+    } finally {
+      setReviewingId(null);
+    }
+  }
+
+  return (
+    <View style={styles.adminOverview}>
+      <View style={styles.adminOverviewHeader}>
+        <Text style={styles.adminOverviewTitle}>상품 판매</Text>
+        <Text style={styles.adminOverviewCount}>{pendingOrders.length}건 대기</Text>
+      </View>
+
+      <View style={styles.requestCard}>
+        <Text style={styles.requestTitle}>상품 등록</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="상품명"
+          placeholderTextColor={colors.muted}
+          value={name}
+          maxLength={60}
+          onChangeText={setName}
+        />
+        <TextInput
+          style={styles.input}
+          placeholder="상품 설명"
+          placeholderTextColor={colors.muted}
+          value={description}
+          maxLength={300}
+          onChangeText={setDescription}
+        />
+        {imageUri ? <Image source={{ uri: imageUri }} style={styles.storeProductImagePreview} resizeMode="cover" /> : null}
+        <Pressable style={styles.secondaryActionButton} onPress={pickStoreProductImage}>
+          <Feather name="image" size={17} color={colors.blue700} />
+          <Text style={styles.secondaryActionText}>{imageUri ? '상품 이미지 변경' : '상품 이미지 등록'}</Text>
+        </Pressable>
+        <View style={styles.requestActions}>
+          <TextInput
+            style={[styles.input, styles.storeNumberInput]}
+            placeholder="가격"
+            placeholderTextColor={colors.muted}
+            value={price}
+            keyboardType="number-pad"
+            onChangeText={(value) => setPrice(value.replace(/[^\d]/g, ''))}
+          />
+          <TextInput
+            style={[styles.input, styles.storeNumberInput]}
+            placeholder="재고"
+            placeholderTextColor={colors.muted}
+            value={stockQuantity}
+            keyboardType="number-pad"
+            onChangeText={(value) => setStockQuantity(value.replace(/[^\d]/g, ''))}
+          />
+        </View>
+        <Pressable style={[styles.secondaryActionButton, creating && styles.disabledButton]} onPress={createProduct} disabled={creating}>
+          <Feather name="plus-circle" size={17} color={colors.blue700} />
+          <Text style={styles.secondaryActionText}>{creating ? '등록중' : '상품 등록'}</Text>
+        </Pressable>
+      </View>
+
+      {pendingOrders.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Feather name="shopping-bag" size={22} color={colors.blue700} />
+          <Text style={styles.emptyStateText}>승인 대기 중인 구매 신청이 없습니다.</Text>
+        </View>
+      ) : (
+        pendingOrders.map((order) => {
+          const reviewing = reviewingId === order.id;
+
+          return (
+            <View key={order.id} style={styles.requestCard}>
+              <View style={styles.requestCardHeader}>
+                <View style={styles.feedbackCardTitleBlock}>
+                  <Text style={styles.requestTitle}>{order.productName}</Text>
+                  <Text style={styles.requestMeta}>
+                    {order.userName} · {order.quantity}개 · {formatWon(order.totalPrice)}
+                  </Text>
+                </View>
+                <Text style={styles.specialStatusBadge}>{formatStoreOrderStatus(order.status)}</Text>
+              </View>
+              <TextInput
+                style={[styles.input, styles.reviewCommentInput]}
+                value={commentByOrder[order.id] ?? ''}
+                onChangeText={(value) => setCommentByOrder((current) => ({ ...current, [order.id]: value }))}
+                placeholder="처리 메모"
+                placeholderTextColor={colors.muted}
+                maxLength={200}
+              />
+              <View style={styles.requestActions}>
+                <Pressable
+                  style={[styles.requestRejectButton, reviewing && styles.disabledButton]}
+                  onPress={() => reviewOrder(order, false)}
+                  disabled={reviewing}
+                >
+                  <Feather name="x" size={16} color={colors.danger} />
+                  <Text style={styles.requestRejectText}>취소</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.requestApproveButton, reviewing && styles.disabledButton]}
+                  onPress={() => reviewOrder(order, true)}
+                  disabled={reviewing}
+                >
+                  <Feather name="check" size={16} color={colors.white} />
+                  <Text style={styles.requestApproveText}>확정</Text>
+                </Pressable>
+              </View>
+            </View>
+          );
+        })
+      )}
+
+      {visibleProducts.length > 0 ? (
+        <View style={styles.requestListSpacing}>
+          <Text style={styles.requestTitle}>등록 상품</Text>
+          {visibleProducts.map((product) => (
+            <View key={product.id} style={styles.adminReservationRow}>
+              {product.imageUri ? <Image source={{ uri: product.imageUri }} style={styles.storeProductThumb} resizeMode="cover" /> : null}
+              <View style={styles.adminReservationCopy}>
+                <Text style={styles.adminReservationName}>{product.name}</Text>
+                <Text style={styles.adminReservationMeta}>
+                  {formatWon(product.price)} · 재고 {product.stockQuantity}개
+                </Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -2082,14 +3929,93 @@ function AdminChangeRequestOverview({
   );
 }
 
+function AdminAbsenceRequestOverview({
+  requests,
+  onReviewAbsenceRequest
+}: {
+  requests: LessonAbsenceRequest[];
+  onReviewAbsenceRequest: (requestId: string, approved: boolean) => Promise<void>;
+}) {
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const pendingRequests = requests.filter((request) => request.status === 'pending');
+
+  async function review(request: LessonAbsenceRequest, approved: boolean) {
+    if (reviewingId) {
+      return;
+    }
+
+    try {
+      setReviewingId(request.id);
+      await onReviewAbsenceRequest(request.id, approved);
+
+      if (approved) {
+        await sendLocalNotification('수업 취소 승인', `${request.userName} 회원의 ${formatSlotBrief(request.startsAt)} 수업 취소를 승인했습니다.`);
+      }
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '수업 취소 요청을 처리하지 못했습니다.';
+      Alert.alert('처리 실패', message);
+    } finally {
+      setReviewingId(null);
+    }
+  }
+
+  return (
+    <View style={styles.adminOverview}>
+      <View style={styles.adminOverviewHeader}>
+        <Text style={styles.adminOverviewTitle}>수업 취소 요청</Text>
+        <Text style={styles.adminOverviewCount}>{pendingRequests.length}건</Text>
+      </View>
+
+      {pendingRequests.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Feather name="inbox" size={22} color={colors.blue700} />
+          <Text style={styles.emptyStateText}>승인 대기 중인 수업 취소 요청이 없습니다.</Text>
+        </View>
+      ) : (
+        pendingRequests.map((request) => {
+          const reviewing = reviewingId === request.id;
+
+          return (
+            <View key={request.id} style={styles.requestCard}>
+              <Text style={styles.requestTitle}>{request.userName} · 수업 취소 요청</Text>
+              <Text style={styles.requestMeta}>
+                {formatSlotBrief(request.startsAt)} · {request.instructor} 강사
+              </Text>
+              <View style={styles.requestActions}>
+                <Pressable
+                  style={[styles.requestRejectButton, reviewing && styles.disabledButton]}
+                  onPress={() => review(request, false)}
+                  disabled={reviewing}
+                >
+                  <Feather name="x" size={16} color={colors.danger} />
+                  <Text style={styles.requestRejectText}>거절</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.requestApproveButton, reviewing && styles.disabledButton]}
+                  onPress={() => review(request, true)}
+                  disabled={reviewing}
+                >
+                  <Feather name="check" size={16} color={colors.white} />
+                  <Text style={styles.requestApproveText}>승인</Text>
+                </Pressable>
+              </View>
+            </View>
+          );
+        })
+      )}
+    </View>
+  );
+}
+
 function AdminAssignmentRequestOverview({
   requests,
   onReviewAssignmentRequest
 }: {
   requests: LessonAssignmentRequest[];
-  onReviewAssignmentRequest: (requestId: string, approved: boolean) => Promise<void>;
+  onReviewAssignmentRequest: (requestId: string, approved: boolean, comment?: string) => Promise<void>;
 }) {
   const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
   const pendingRequests = requests.filter((request) => request.status === 'pending');
 
   async function review(request: LessonAssignmentRequest, approved: boolean) {
@@ -2099,7 +4025,13 @@ function AdminAssignmentRequestOverview({
 
     try {
       setReviewingId(request.id);
-      await onReviewAssignmentRequest(request.id, approved);
+      const comment = reviewComments[request.id]?.trim() ?? '';
+      await onReviewAssignmentRequest(request.id, approved, comment);
+      setReviewComments((current) => {
+        const next = { ...current };
+        delete next[request.id];
+        return next;
+      });
 
       if (approved) {
         await sendLocalNotification(
@@ -2139,6 +4071,15 @@ function AdminAssignmentRequestOverview({
               <Text style={styles.requestMeta}>
                 {formatSlotBrief(request.startsAt)} · {request.instructor} 강사
               </Text>
+              <TextInput
+                style={[styles.input, styles.reviewCommentInput]}
+                value={reviewComments[request.id] ?? ''}
+                onChangeText={(value) => setReviewComments((current) => ({ ...current, [request.id]: value.slice(0, 120) }))}
+                placeholder="회원에게 전달할 코멘트"
+                placeholderTextColor={colors.muted}
+                multiline
+                maxLength={120}
+              />
               <View style={styles.requestActions}>
                 <Pressable
                   style={[styles.requestRejectButton, reviewing && styles.disabledButton]}
@@ -2169,13 +4110,16 @@ function AdminSpecialLessonOverview({
   specialLessons,
   registrations,
   onCreateSpecialLesson,
+  onUpdateSpecialLesson,
   onReviewSpecialLessonRegistration
 }: {
   specialLessons: SpecialLesson[];
   registrations: SpecialLessonRegistration[];
   onCreateSpecialLesson: (input: CreateSpecialLessonInput) => Promise<void>;
+  onUpdateSpecialLesson: (input: UpdateSpecialLessonInput) => Promise<void>;
   onReviewSpecialLessonRegistration: (registrationId: string, approved: boolean) => Promise<void>;
 }) {
+  const [editingLessonId, setEditingLessonId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [lessonDate, setLessonDate] = useState(getTodayKey());
@@ -2188,8 +4132,34 @@ function AdminSpecialLessonOverview({
   const [reviewingId, setReviewingId] = useState<string | null>(null);
   const pendingRegistrations = registrations.filter((registration) => registration.status === 'pending' || registration.status === 'waitlisted');
   const activeRegistrationCount = registrations.filter((registration) => registration.status !== 'rejected' && registration.status !== 'canceled').length;
+  const editingLesson = editingLessonId ? specialLessons.find((lesson) => lesson.id === editingLessonId) ?? null : null;
+  const posterPreviewUri = imageUri ?? editingLesson?.imageUri;
 
-  async function createLesson() {
+  function resetLessonForm() {
+    setEditingLessonId(null);
+    setTitle('');
+    setDescription('');
+    setLessonDate(getTodayKey());
+    setLessonTime('19:00');
+    setInstructor('');
+    setImageUri(undefined);
+    setCapacity('8');
+    setDurationMinutes(60);
+  }
+
+  function startEditLesson(lesson: SpecialLesson) {
+    setEditingLessonId(lesson.id);
+    setTitle(lesson.title);
+    setDescription(lesson.description);
+    setLessonDate(getDateKey(lesson.startsAt));
+    setLessonTime(formatSlotHour(lesson.startsAt));
+    setInstructor(lesson.instructor);
+    setImageUri(undefined);
+    setCapacity(String(lesson.capacity));
+    setDurationMinutes(lesson.durationMinutes);
+  }
+
+  async function submitLesson() {
     if (creating) {
       return;
     }
@@ -2209,7 +4179,7 @@ function AdminSpecialLessonOverview({
 
     try {
       setCreating(true);
-      await onCreateSpecialLesson({
+      const input = {
         title,
         description,
         imageUri,
@@ -2217,16 +4187,19 @@ function AdminSpecialLessonOverview({
         instructor,
         durationMinutes,
         capacity: nextCapacity
-      });
-      setTitle('');
-      setDescription('');
-      setImageUri(undefined);
-      setInstructor('');
-      setCapacity('8');
-      Alert.alert('특별수업 등록', '회원에게 특별수업 모집이 노출됩니다.');
+      };
+
+      if (editingLessonId) {
+        await onUpdateSpecialLesson({ ...input, id: editingLessonId });
+      } else {
+        await onCreateSpecialLesson(input);
+      }
+
+      resetLessonForm();
+      Alert.alert(editingLessonId ? '특별수업 수정' : '특별수업 등록', editingLessonId ? '특별수업 정보가 수정되었습니다.' : '회원에게 특별수업 모집이 노출됩니다.');
     } catch (error) {
-      const message = error instanceof DatabaseError ? error.message : '특별수업을 등록하지 못했습니다.';
-      Alert.alert('등록 실패', message);
+      const message = error instanceof DatabaseError ? error.message : '특별수업을 저장하지 못했습니다.';
+      Alert.alert(editingLessonId ? '수정 실패' : '등록 실패', message);
     } finally {
       setCreating(false);
     }
@@ -2270,7 +4243,7 @@ function AdminSpecialLessonOverview({
   return (
     <View style={styles.adminOverview}>
       <View style={styles.adminOverviewHeader}>
-        <Text style={styles.adminOverviewTitle}>특별수업 모집</Text>
+        <Text style={styles.adminOverviewTitle}>{editingLessonId ? '특별수업 수정' : '특별수업 모집'}</Text>
         <Text style={styles.adminOverviewCount}>{pendingRegistrations.length}건 대기</Text>
       </View>
 
@@ -2323,10 +4296,10 @@ function AdminSpecialLessonOverview({
           multiline
           maxLength={300}
         />
-        {imageUri ? <Image source={{ uri: imageUri }} style={styles.specialLessonPosterPreview} resizeMode="cover" /> : null}
+        {posterPreviewUri ? <Image source={{ uri: posterPreviewUri }} style={styles.specialLessonPosterPreview} resizeMode="cover" /> : null}
         <Pressable style={styles.secondaryActionButton} onPress={pickSpecialLessonImage}>
           <Feather name="image" size={17} color={colors.blue700} />
-          <Text style={styles.secondaryActionText}>{imageUri ? '포스터 변경' : '포스터 등록'}</Text>
+          <Text style={styles.secondaryActionText}>{posterPreviewUri ? '포스터 변경' : '포스터 등록'}</Text>
         </Pressable>
         <View style={styles.lessonDurationSelector}>
           {[30, 60, 90, 120].map((duration) => {
@@ -2345,10 +4318,27 @@ function AdminSpecialLessonOverview({
             );
           })}
         </View>
-        <Pressable style={[styles.secondaryActionButton, creating && styles.disabledButton]} onPress={createLesson} disabled={creating}>
-          <Feather name="plus-circle" size={17} color={colors.blue700} />
-          <Text style={styles.secondaryActionText}>{creating ? '등록중' : '특별수업 등록'}</Text>
-        </Pressable>
+        <View style={styles.requestActions}>
+          {editingLessonId ? (
+            <Pressable style={[styles.requestRejectButton, creating && styles.disabledButton]} onPress={resetLessonForm} disabled={creating}>
+              <Feather name="x" size={16} color={colors.danger} />
+              <Text style={styles.requestRejectText}>취소</Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            style={[
+              editingLessonId ? styles.requestApproveButton : styles.secondaryActionButton,
+              creating && styles.disabledButton
+            ]}
+            onPress={submitLesson}
+            disabled={creating}
+          >
+            <Feather name={editingLessonId ? 'save' : 'plus-circle'} size={17} color={editingLessonId ? colors.white : colors.blue700} />
+            <Text style={editingLessonId ? styles.requestApproveText : styles.secondaryActionText}>
+              {creating ? '저장중' : editingLessonId ? '수정 저장' : '특별수업 등록'}
+            </Text>
+          </Pressable>
+        </View>
       </View>
 
       {specialLessons.length === 0 ? (
@@ -2375,6 +4365,14 @@ function AdminSpecialLessonOverview({
             </View>
             {lesson.description ? <Text style={styles.feedbackBody}>{lesson.description}</Text> : null}
             <Text style={styles.requestMeta}>신청 {lesson.applicationCount}명 · {lesson.durationMinutes}분</Text>
+            <Pressable
+              style={[styles.secondaryActionButton, editingLessonId === lesson.id && styles.memberAdjustButtonActive]}
+              onPress={() => startEditLesson(lesson)}
+              accessibilityRole="button"
+            >
+              <Feather name="edit-2" size={17} color={colors.blue700} />
+              <Text style={styles.secondaryActionText}>{editingLessonId === lesson.id ? '수정 중' : '수정'}</Text>
+            </Pressable>
           </View>
         ))
       )}
@@ -2445,88 +4443,16 @@ function AdminLessonFeedbackOverview({
   onPublishLessonFeedback: (input: PublishLessonFeedbackInput) => Promise<void>;
 }) {
   const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(null);
-  const [feedbackText, setFeedbackText] = useState('');
-  const [mediaUri, setMediaUri] = useState<string | undefined>();
-  const [mediaType, setMediaType] = useState<LessonFeedbackMediaType | undefined>();
-  const [saving, setSaving] = useState(false);
   const selectedTarget = useMemo(() => {
     return targets.find((target) => getFeedbackTargetKey(target) === selectedTargetKey) ?? null;
   }, [selectedTargetKey, targets]);
   const pendingCount = targets.filter((target) => !target.feedbackId).length;
-  const previewUri = mediaUri ?? selectedTarget?.mediaUri;
-  const previewType = mediaType ?? selectedTarget?.mediaType ?? undefined;
 
   useEffect(() => {
     if (selectedTargetKey && !targets.some((target) => getFeedbackTargetKey(target) === selectedTargetKey)) {
       setSelectedTargetKey(null);
     }
   }, [selectedTargetKey, targets]);
-
-  useEffect(() => {
-    if (!selectedTarget) {
-      setFeedbackText('');
-      setMediaUri(undefined);
-      setMediaType(undefined);
-      return;
-    }
-
-    setFeedbackText(selectedTarget?.feedbackText ?? '');
-    setMediaUri(undefined);
-    setMediaType(undefined);
-  }, [selectedTarget?.slotId, selectedTarget?.userId, selectedTarget?.feedbackText]);
-
-  async function pickFeedbackMedia() {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-
-    if (!permission.granted) {
-      Alert.alert('사진 접근 권한이 필요합니다.');
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
-      allowsEditing: false,
-      quality: 0.82,
-      videoQuality: ImagePicker.UIImagePickerControllerQualityType.Medium
-    });
-
-    if (result.canceled) {
-      return;
-    }
-
-    const asset = result.assets[0];
-    const nextMediaType: LessonFeedbackMediaType = asset?.type === 'video' ? 'video' : 'image';
-
-    setMediaUri(asset?.uri);
-    setMediaType(nextMediaType);
-  }
-
-  async function submitFeedback() {
-    if (!selectedTarget || saving) {
-      return;
-    }
-
-    try {
-      setSaving(true);
-      await onPublishLessonFeedback({
-        slotId: selectedTarget.slotId,
-        userId: selectedTarget.userId,
-        feedbackText,
-        mediaUri,
-        mediaType
-      });
-      setSelectedTargetKey(null);
-      setFeedbackText('');
-      setMediaUri(undefined);
-      setMediaType(undefined);
-      Alert.alert('피드백 저장', '회원에게 수업 피드백이 등록되었습니다.');
-    } catch (error) {
-      const message = error instanceof DatabaseError ? error.message : '피드백을 저장하지 못했습니다.';
-      Alert.alert('저장 실패', message);
-    } finally {
-      setSaving(false);
-    }
-  }
 
   return (
     <View style={styles.adminOverview}>
@@ -2570,42 +4496,162 @@ function AdminLessonFeedbackOverview({
           </ScrollView>
 
           {selectedTarget ? (
-            <View style={styles.feedbackComposer}>
-              <View style={styles.feedbackComposerHeader}>
-                <Text style={styles.requestTitle}>
-                  {selectedTarget.userName} · {formatSlotBrief(selectedTarget.startsAt)}
-                </Text>
-                <Text style={styles.requestMeta}>{selectedTarget.instructor} 강사</Text>
-              </View>
-              <TextInput
-                style={[styles.input, styles.feedbackTextInput]}
-                value={feedbackText}
-                onChangeText={(value) => setFeedbackText(value.slice(0, 100))}
-                placeholder="피드백 글 100자 이내"
-                placeholderTextColor={colors.muted}
-                multiline
-                maxLength={100}
-              />
-              <Text style={styles.feedbackCounter}>{feedbackText.length}/100</Text>
-              <LessonFeedbackMediaPreview uri={previewUri} mediaType={previewType} compact />
-              <View style={styles.requestActions}>
-                <Pressable style={styles.requestRejectButton} onPress={pickFeedbackMedia}>
-                  <Feather name="paperclip" size={16} color={colors.danger} />
-                  <Text style={styles.requestRejectText}>{mediaUri ? '첨부 변경' : '사진/영상'}</Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.requestApproveButton, saving && styles.disabledButton]}
-                  onPress={submitFeedback}
-                  disabled={saving}
-                >
-                  <Feather name="send" size={16} color={colors.white} />
-                  <Text style={styles.requestApproveText}>{saving ? '저장중' : '저장'}</Text>
-                </Pressable>
-              </View>
-            </View>
+            <AdminLessonFeedbackComposer
+              target={selectedTarget}
+              onPublishLessonFeedback={onPublishLessonFeedback}
+              onSaved={() => setSelectedTargetKey(null)}
+            />
           ) : null}
         </>
       )}
+    </View>
+  );
+}
+
+function AdminLessonFeedbackModal({
+  target,
+  onClose,
+  onPublishLessonFeedback
+}: {
+  target: LessonFeedbackTarget | null;
+  onClose: () => void;
+  onPublishLessonFeedback: (input: PublishLessonFeedbackInput) => Promise<void>;
+}) {
+  if (!target) {
+    return null;
+  }
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={styles.modalCard}>
+          <View style={styles.modalHeader}>
+            <View style={styles.feedbackCardTitleBlock}>
+              <Text style={styles.modalTitle}>수업 피드백</Text>
+              <Text style={styles.requestMeta}>
+                {target.userName} · {formatSlotBrief(target.startsAt)}
+              </Text>
+            </View>
+            <Pressable style={styles.modalCloseButton} onPress={onClose} accessibilityRole="button">
+              <Feather name="x" size={18} color={colors.blue700} />
+            </Pressable>
+          </View>
+
+          <AdminLessonFeedbackComposer target={target} onPublishLessonFeedback={onPublishLessonFeedback} onSaved={onClose} />
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function AdminLessonFeedbackComposer({
+  target,
+  onPublishLessonFeedback,
+  onSaved
+}: {
+  target: LessonFeedbackTarget;
+  onPublishLessonFeedback: (input: PublishLessonFeedbackInput) => Promise<void>;
+  onSaved: () => void;
+}) {
+  const [feedbackText, setFeedbackText] = useState('');
+  const [mediaUri, setMediaUri] = useState<string | undefined>();
+  const [mediaType, setMediaType] = useState<LessonFeedbackMediaType | undefined>();
+  const [saving, setSaving] = useState(false);
+  const previewUri = mediaUri ?? target.mediaUri;
+  const previewType = mediaType ?? target.mediaType ?? undefined;
+
+  useEffect(() => {
+    setFeedbackText(target.feedbackText ?? '');
+    setMediaUri(undefined);
+    setMediaType(undefined);
+  }, [target.slotId, target.userId, target.feedbackText]);
+
+  async function pickFeedbackMedia() {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (!permission.granted) {
+      Alert.alert('사진 접근 권한이 필요합니다.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      allowsEditing: false,
+      quality: 0.82,
+      videoQuality: ImagePicker.UIImagePickerControllerQualityType.Medium
+    });
+
+    if (result.canceled) {
+      return;
+    }
+
+    const asset = result.assets[0];
+    const nextMediaType: LessonFeedbackMediaType = asset?.type === 'video' ? 'video' : 'image';
+
+    setMediaUri(asset?.uri);
+    setMediaType(nextMediaType);
+  }
+
+  async function submitFeedback() {
+    if (saving) {
+      return;
+    }
+
+    try {
+      setSaving(true);
+      await onPublishLessonFeedback({
+        slotId: target.slotId,
+        userId: target.userId,
+        feedbackText,
+        mediaUri,
+        mediaType
+      });
+      setFeedbackText('');
+      setMediaUri(undefined);
+      setMediaType(undefined);
+      onSaved();
+      Alert.alert('피드백 저장', '회원에게 수업 피드백이 등록되었습니다.');
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '피드백을 저장하지 못했습니다.';
+      Alert.alert('저장 실패', message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <View style={styles.feedbackComposer}>
+      <View style={styles.feedbackComposerHeader}>
+        <Text style={styles.requestTitle}>
+          {target.userName} · {formatSlotBrief(target.startsAt)}
+        </Text>
+        <Text style={styles.requestMeta}>{target.instructor} 강사</Text>
+      </View>
+      <TextInput
+        style={[styles.input, styles.feedbackTextInput]}
+        value={feedbackText}
+        onChangeText={(value) => setFeedbackText(value.slice(0, 100))}
+        placeholder="피드백 글 100자 이내"
+        placeholderTextColor={colors.muted}
+        multiline
+        maxLength={100}
+      />
+      <Text style={styles.feedbackCounter}>{feedbackText.length}/100</Text>
+      <LessonFeedbackMediaPreview uri={previewUri} mediaType={previewType} compact />
+      <View style={styles.requestActions}>
+        <Pressable style={styles.requestRejectButton} onPress={pickFeedbackMedia}>
+          <Feather name="paperclip" size={16} color={colors.danger} />
+          <Text style={styles.requestRejectText}>{mediaUri ? '첨부 변경' : '사진/영상'}</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.requestApproveButton, saving && styles.disabledButton]}
+          onPress={submitFeedback}
+          disabled={saving}
+        >
+          <Feather name="send" size={16} color={colors.white} />
+          <Text style={styles.requestApproveText}>{saving ? '저장중' : '저장'}</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -2617,17 +4663,15 @@ function AdminScheduleOverview({
   onUpdateLessonSlot,
   onAssignLessonReservation,
   onCancelLessonReservation,
-  onCancelLessonSlot,
-  onUpdateLessonInstructor
+  onCancelLessonSlot
 }: {
   slots: ClassSlot[];
   members: MemberSummary[];
   onCreateLessonSlot: (slotDate: string, hour: number, minute: number, instructor: string, durationMinutes: number) => Promise<void>;
   onUpdateLessonSlot: (slotId: string, instructor: string, durationMinutes: number, capacity: number) => Promise<void>;
-  onAssignLessonReservation: (slotId: string, memberId: string) => Promise<void>;
+  onAssignLessonReservation: (slotId: string, memberId: string, durationMinutes: number) => Promise<void>;
   onCancelLessonReservation: (slotId: string, memberId: string) => Promise<void>;
   onCancelLessonSlot: (slotId: string) => Promise<void>;
-  onUpdateLessonInstructor: (slotId: string, instructor: string) => Promise<void>;
 }) {
   const [slotDate, setSlotDate] = useState(slots[0]?.date ?? getTodayKey());
   const [slotTime, setSlotTime] = useState('19:00');
@@ -2636,41 +4680,45 @@ function AdminScheduleOverview({
   const [addingSlot, setAddingSlot] = useState(false);
   const [assignmentQuery, setAssignmentQuery] = useState('');
   const [selectedAssignmentMemberId, setSelectedAssignmentMemberId] = useState<string | null>(null);
-  const calendarHeaderScrollRef = useRef<ScrollView | null>(null);
-  const calendarBodyScrollRef = useRef<ScrollView | null>(null);
-  const syncingCalendarScroll = useRef(false);
-  const operatingSlots = useMemo(
-    () => [...slots].sort(sortSlotsByStartsAt),
-    [slots]
+  const [selectedWeekStart, setSelectedWeekStart] = useState('');
+  const operatingSlots = useMemo(() => [...slots].sort(sortSlotsByStartsAt), [slots]);
+  const weekOptions = useMemo(() => {
+    const weekStarts = Array.from(new Set(operatingSlots.map((slot) => getWeekStartKey(slot.date))));
+
+    return weekStarts.map((weekStart) => {
+      const weekSlots = operatingSlots.filter((slot) => getWeekStartKey(slot.date) === weekStart);
+      const activeCount = weekSlots.filter((slot) => slot.isActive).length;
+
+      return {
+        id: weekStart,
+        label: formatWeekRange(weekStart),
+        count: activeCount
+      };
+    });
+  }, [operatingSlots]);
+  const selectedWeekSlots = useMemo(
+    () => operatingSlots.filter((slot) => getWeekStartKey(slot.date) === selectedWeekStart),
+    [operatingSlots, selectedWeekStart]
   );
-  const dateColumns = useMemo(() => {
+  const selectedWeekDates = useMemo(() => {
     const seen = new Set<string>();
 
-    return operatingSlots.reduce<Array<{ date: string; shortDateLabel: string; weekdayLabel: string }>>((columns, slot) => {
+    return selectedWeekSlots.reduce<Array<{ date: string; shortDateLabel: string; weekdayLabel: string }>>((dates, slot) => {
       if (seen.has(slot.date)) {
-        return columns;
+        return dates;
       }
 
       seen.add(slot.date);
-      columns.push({
+      dates.push({
         date: slot.date,
         shortDateLabel: slot.shortDateLabel,
         weekdayLabel: slot.weekdayLabel
       });
 
-      return columns;
+      return dates;
     }, []);
-  }, [operatingSlots]);
-  const operatingTimes = useMemo(
-    () => Array.from(new Set(operatingSlots.map((slot) => slot.startMinutes))).sort((a, b) => a - b),
-    [operatingSlots]
-  );
-  const slotMap = useMemo(() => {
-    return operatingSlots.reduce<Map<string, ClassSlot>>((map, slot) => {
-      map.set(getCalendarSlotKey(slot.date, slot.startMinutes), slot);
-      return map;
-    }, new Map());
-  }, [operatingSlots]);
+  }, [selectedWeekSlots]);
+  const selectedWeekActiveCount = selectedWeekSlots.filter((slot) => slot.isActive).length;
   const assignmentMembers = useMemo(() => {
     const query = assignmentQuery.trim().toLowerCase();
 
@@ -2691,6 +4739,17 @@ function AdminScheduleOverview({
   const selectedAssignmentMember = useMemo(() => {
     return assignmentMembers.find((member) => member.id === selectedAssignmentMemberId) ?? assignmentMembers[0] ?? null;
   }, [assignmentMembers, selectedAssignmentMemberId]);
+
+  useEffect(() => {
+    if (!selectedWeekStart && weekOptions[0]) {
+      setSelectedWeekStart(weekOptions[0].id);
+      return;
+    }
+
+    if (selectedWeekStart && !weekOptions.some((week) => week.id === selectedWeekStart)) {
+      setSelectedWeekStart(weekOptions[0]?.id ?? '');
+    }
+  }, [selectedWeekStart, weekOptions]);
 
   useEffect(() => {
     if (!slotDate && slots[0]?.date) {
@@ -2721,6 +4780,11 @@ function AdminScheduleOverview({
       return;
     }
 
+    if (timeParts.hour < POOL_OPEN_HOUR || timeParts.hour > POOL_CLOSE_HOUR) {
+      Alert.alert('영업시간 확인', '수업은 05:00부터 22:00 사이에만 열 수 있습니다.');
+      return;
+    }
+
     try {
       setAddingSlot(true);
       await onCreateLessonSlot(slotDate, timeParts.hour, timeParts.minute, slotInstructor, slotDuration);
@@ -2733,30 +4797,14 @@ function AdminScheduleOverview({
     }
   }
 
-  function syncCalendarHorizontalScroll(target: 'header' | 'body', event: NativeSyntheticEvent<NativeScrollEvent>) {
-    if (syncingCalendarScroll.current) {
-      return;
-    }
-
-    const x = event.nativeEvent.contentOffset.x;
-    syncingCalendarScroll.current = true;
-
-    if (target === 'header') {
-      calendarHeaderScrollRef.current?.scrollTo({ x, animated: false });
-    } else {
-      calendarBodyScrollRef.current?.scrollTo({ x, animated: false });
-    }
-
-    requestAnimationFrame(() => {
-      syncingCalendarScroll.current = false;
-    });
-  }
-
   return (
     <View style={styles.adminOverview}>
       <View style={styles.adminOverviewHeader}>
-        <Text style={styles.adminOverviewTitle}>운영 달력</Text>
-        <Text style={styles.adminOverviewCount}>{operatingSlots.length}칸</Text>
+        <View style={styles.feedbackCardTitleBlock}>
+          <Text style={styles.adminOverviewTitle}>주간 수업 운영</Text>
+          <Text style={styles.requestMeta}>수업별로 바로 열고 닫을 수 있습니다.</Text>
+        </View>
+        <Text style={styles.adminOverviewCount}>{selectedWeekActiveCount}/{selectedWeekSlots.length}개 열림</Text>
       </View>
 
       <View style={styles.calendarAddPanel}>
@@ -2770,7 +4818,7 @@ function AdminScheduleOverview({
             autoCapitalize="none"
           />
           <TextInput
-            style={[styles.input, styles.fixedLessonSmallInput]}
+            style={[styles.input, styles.fixedLessonSmallInput, styles.calendarTimeInput]}
             value={slotTime}
             onChangeText={setSlotTime}
             keyboardType="numbers-and-punctuation"
@@ -2778,7 +4826,7 @@ function AdminScheduleOverview({
             placeholderTextColor={colors.muted}
           />
           <TextInput
-            style={[styles.input, styles.fixedLessonInstructorInput]}
+            style={[styles.input, styles.fixedLessonInstructorInput, styles.calendarAddInstructorInput]}
             value={slotInstructor}
             onChangeText={setSlotInstructor}
             placeholder="강사"
@@ -2808,6 +4856,24 @@ function AdminScheduleOverview({
           <Text style={styles.secondaryActionText}>수업 추가</Text>
         </Pressable>
       </View>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.weekSelector}>
+        {weekOptions.map((week) => {
+          const selected = selectedWeekStart === week.id;
+
+          return (
+            <Pressable
+              key={week.id}
+              style={[styles.weekSelectorButton, selected && styles.weekSelectorButtonActive]}
+              onPress={() => setSelectedWeekStart(week.id)}
+              accessibilityRole="button"
+            >
+              <Text style={[styles.weekSelectorText, selected && styles.weekSelectorTextActive]}>{week.label}</Text>
+              <Text style={[styles.weekSelectorMeta, selected && styles.weekSelectorMetaActive]}>{week.count}개 열림</Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
 
       <View style={styles.calendarAssignmentPanel}>
         <View style={styles.calendarAssignmentHeader}>
@@ -2848,87 +4914,47 @@ function AdminScheduleOverview({
         </ScrollView>
       </View>
 
-      {operatingSlots.length === 0 ? (
+      {selectedWeekSlots.length === 0 ? (
         <View style={styles.emptyState}>
           <Feather name="calendar" size={22} color={colors.blue700} />
-          <Text style={styles.emptyStateText}>배정된 수업이 없습니다.</Text>
+          <Text style={styles.emptyStateText}>이 주에는 수업 시간이 없습니다.</Text>
         </View>
       ) : (
-        <View style={styles.calendarFrame}>
-          <View style={styles.calendarPinnedHeader}>
-            <View style={[styles.calendarTimeCell, styles.calendarHeaderTimeCell]}>
-              <Text style={styles.calendarTimeText}>시간</Text>
-            </View>
-            <ScrollView
-              ref={calendarHeaderScrollRef}
-              style={styles.calendarHorizontalScroll}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              scrollEventThrottle={16}
-              onScroll={(event) => syncCalendarHorizontalScroll('body', event)}
-            >
-              <View style={styles.calendarDateHeaderRow}>
-                {dateColumns.map((column) => (
-                  <View key={column.date} style={styles.calendarDateHeaderCell}>
-                    <Text style={styles.calendarDateText}>{column.shortDateLabel}</Text>
-                    <Text style={styles.calendarWeekdayText}>{column.weekdayLabel}</Text>
-                  </View>
-                ))}
-              </View>
-            </ScrollView>
-          </View>
+        <View style={styles.weekLessonList}>
+          {selectedWeekDates.map((day) => {
+            const daySlots = selectedWeekSlots.filter((slot) => slot.date === day.date);
+            const openCount = daySlots.filter((slot) => slot.isActive).length;
 
-          <ScrollView style={styles.calendarBodyScroll} nestedScrollEnabled showsVerticalScrollIndicator>
-            <View style={styles.calendarBodyRow}>
-              <View style={styles.calendarTimeColumn}>
-                {operatingTimes.map((startMinutes) => (
-                  <View key={startMinutes} style={styles.calendarTimeCell}>
-                    <Text style={styles.calendarTimeText}>{formatMinuteLabel(startMinutes)}</Text>
-                  </View>
-                ))}
-              </View>
-
-              <ScrollView
-                ref={calendarBodyScrollRef}
-                style={styles.calendarHorizontalScroll}
-                horizontal
-                showsHorizontalScrollIndicator
-                scrollEventThrottle={16}
-                onScroll={(event) => syncCalendarHorizontalScroll('header', event)}
-              >
-                <View>
-                  {operatingTimes.map((startMinutes) => (
-                    <View key={startMinutes} style={styles.calendarRow}>
-                      {dateColumns.map((column) => {
-                        const slot = slotMap.get(getCalendarSlotKey(column.date, startMinutes));
-
-                        return (
-                          <AdminCalendarCell
-                            key={`${column.date}-${startMinutes}`}
-                            slot={slot}
-                            selectedAssignmentMember={selectedAssignmentMember}
-                            onOpenLessonSlot={onCreateLessonSlot}
-                            onUpdateLessonSlot={onUpdateLessonSlot}
-                            onAssignLessonReservation={onAssignLessonReservation}
-                            onCancelLessonReservation={onCancelLessonReservation}
-                            onCancelLessonSlot={onCancelLessonSlot}
-                            onUpdateLessonInstructor={onUpdateLessonInstructor}
-                          />
-                        );
-                      })}
-                    </View>
-                  ))}
+            return (
+              <View key={day.date} style={styles.weekDaySection}>
+                <View style={styles.weekDayHeader}>
+                  <Text style={styles.weekDayTitle}>
+                    {day.shortDateLabel} {day.weekdayLabel}
+                  </Text>
+                  <Text style={styles.weekDayMeta}>{openCount}/{daySlots.length}개 열림</Text>
                 </View>
-              </ScrollView>
-            </View>
-          </ScrollView>
+                {daySlots.map((slot) => (
+                  <AdminWeeklyLessonRow
+                    key={slot.id}
+                    slot={slot}
+                    selectedAssignmentMember={selectedAssignmentMember}
+                    onOpenLessonSlot={onCreateLessonSlot}
+                    onUpdateLessonSlot={onUpdateLessonSlot}
+                    onAssignLessonReservation={onAssignLessonReservation}
+                    onCancelLessonReservation={onCancelLessonReservation}
+                    onCancelLessonSlot={onCancelLessonSlot}
+                  />
+                ))}
+              </View>
+            );
+          })}
         </View>
       )}
     </View>
   );
 }
 
-function AdminCalendarCell({
+function AdminWeeklyLessonRow({
   slot,
   selectedAssignmentMember,
   onOpenLessonSlot,
@@ -2936,68 +4962,43 @@ function AdminCalendarCell({
   onAssignLessonReservation,
   onCancelLessonReservation,
   onCancelLessonSlot,
-  onUpdateLessonInstructor
+  onCancelFixedLesson
 }: {
-  slot?: ClassSlot;
+  slot: ClassSlot;
   selectedAssignmentMember: MemberSummary | null;
   onOpenLessonSlot: (slotDate: string, hour: number, minute: number, instructor: string, durationMinutes: number) => Promise<void>;
   onUpdateLessonSlot: (slotId: string, instructor: string, durationMinutes: number, capacity: number) => Promise<void>;
-  onAssignLessonReservation: (slotId: string, memberId: string) => Promise<void>;
+  onAssignLessonReservation: (slotId: string, memberId: string, durationMinutes: number) => Promise<void>;
   onCancelLessonReservation: (slotId: string, memberId: string) => Promise<void>;
   onCancelLessonSlot: (slotId: string) => Promise<void>;
-  onUpdateLessonInstructor: (slotId: string, instructor: string) => Promise<void>;
+  onCancelFixedLesson?: (fixedLessonId: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
-  const [instructor, setInstructor] = useState(slot?.instructor ?? '');
-  const [durationMinutes, setDurationMinutes] = useState(slot?.durationMinutes ?? 60);
+  const [instructor, setInstructor] = useState(slot.instructor);
+  const [durationMinutes, setDurationMinutes] = useState(slot.durationMinutes);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [assigning, setAssigning] = useState(false);
-
-  useEffect(() => {
-    setInstructor(slot?.instructor ?? '');
-  }, [slot?.instructor]);
-
-  useEffect(() => {
-    setDurationMinutes(slot?.durationMinutes ?? 60);
-  }, [slot?.durationMinutes]);
-
-  if (!slot) {
-    return <View style={[styles.calendarSlotCell, styles.calendarEmptySlotCell]} />;
-  }
-
-  const currentSlot = slot;
-  const isOpen = currentSlot.isActive;
-  const hasFixedLesson = currentSlot.fixedMembers.length > 0;
-  const absentUserIds = new Set(currentSlot.absences.map((person) => person.userId));
-  const attendingFixedMembers = currentSlot.fixedMembers.filter((member) => !absentUserIds.has(member.userId));
-  const fixedNames = formatPersonNames(attendingFixedMembers);
-  const absenceNames = formatPersonNames(currentSlot.absences);
-  const occupiedCount = attendingFixedMembers.length + currentSlot.substitutes.length;
-  const hasOpenSeat = currentSlot.openSeatCount > 0;
-  const hasMemberAssignment = currentSlot.fixedMembers.length > 0 || currentSlot.substitutes.length > 0 || currentSlot.absences.length > 0;
+  const [cancelingFixedLessonId, setCancelingFixedLessonId] = useState<string | null>(null);
+  const isOpen = slot.isActive;
+  const absentUserIds = new Set(slot.absences.map((person) => person.userId));
+  const attendingFixedMembers = slot.fixedMembers.filter((member) => !absentUserIds.has(member.userId));
+  const absenceNames = formatPersonNames(slot.absences);
   const selectedAssigned = Boolean(
-    selectedAssignmentMember && currentSlot.substitutes.some((person) => person.userId === selectedAssignmentMember.id)
+    selectedAssignmentMember && slot.substitutes.some((person) => person.userId === selectedAssignmentMember.id)
   );
   const selectedAlreadyFixed = Boolean(
-    selectedAssignmentMember && currentSlot.fixedMembers.some((person) => person.userId === selectedAssignmentMember.id)
+    selectedAssignmentMember && slot.fixedMembers.some((person) => person.userId === selectedAssignmentMember.id)
   );
+  const occupiedCount = attendingFixedMembers.length + slot.substitutes.length;
 
-  async function cancelAssignedMember(person: ReservationPerson) {
-    if (assigning || !person.userId) {
-      return;
-    }
+  useEffect(() => {
+    setInstructor(slot.instructor);
+  }, [slot.instructor]);
 
-    try {
-      setAssigning(true);
-      await onCancelLessonReservation(currentSlot.id, person.userId);
-    } catch (error) {
-      const message = error instanceof DatabaseError ? error.message : '배정을 취소하지 못했습니다.';
-      Alert.alert('배정 취소 실패', message);
-    } finally {
-      setAssigning(false);
-    }
-  }
+  useEffect(() => {
+    setDurationMinutes(slot.durationMinutes);
+  }, [slot.durationMinutes]);
 
   async function openSlot() {
     if (saving) {
@@ -3006,7 +5007,7 @@ function AdminCalendarCell({
 
     try {
       setSaving(true);
-      await onOpenLessonSlot(currentSlot.date, currentSlot.hour, currentSlot.minute, instructor || currentSlot.instructor, durationMinutes);
+      await onOpenLessonSlot(slot.date, slot.hour, slot.minute, instructor || slot.instructor, durationMinutes);
     } catch (error) {
       const message = error instanceof DatabaseError ? error.message : '수업을 열지 못했습니다.';
       Alert.alert('열기 실패', message);
@@ -3022,7 +5023,7 @@ function AdminCalendarCell({
 
     try {
       setSaving(true);
-      await onUpdateLessonSlot(currentSlot.id, instructor, durationMinutes, currentSlot.capacity);
+      await onUpdateLessonSlot(slot.id, instructor, durationMinutes, slot.capacity);
       setEditing(false);
     } catch (error) {
       const message = error instanceof DatabaseError ? error.message : '수업을 변경하지 못했습니다.';
@@ -3039,21 +5040,66 @@ function AdminCalendarCell({
 
     Alert.alert(
       '수업 닫기',
-      `${currentSlot.shortDateLabel} ${formatSlotHour(currentSlot.startsAt)} 수업을 닫을까요? 이 날짜 수업 전체가 닫히고, 대체/개별 예약은 취소 및 환불됩니다.`,
+      `${slot.shortDateLabel} ${formatSlotHour(slot.startsAt)} 수업을 닫을까요? 이 시간의 개별 배정은 취소 및 환불됩니다.`,
       [
-        { text: '닫기', style: 'cancel' },
+        { text: '취소', style: 'cancel' },
         {
-          text: '수업 닫기',
+          text: '닫기',
           style: 'destructive',
           onPress: async () => {
             try {
               setDeleting(true);
-              await onCancelLessonSlot(currentSlot.id);
+              await onCancelLessonSlot(slot.id);
             } catch (error) {
               const message = error instanceof DatabaseError ? error.message : '수업을 닫지 못했습니다.';
               Alert.alert('닫기 실패', message);
             } finally {
               setDeleting(false);
+            }
+          }
+        }
+      ]
+    );
+  }
+
+  async function cancelAssignedMember(person: ReservationPerson) {
+    if (assigning || !person.userId) {
+      return;
+    }
+
+    try {
+      setAssigning(true);
+      await onCancelLessonReservation(slot.id, person.userId);
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '배정을 취소하지 못했습니다.';
+      Alert.alert('배정 취소 실패', message);
+    } finally {
+      setAssigning(false);
+    }
+  }
+
+  function confirmCancelFixedMember(person: ReservationPerson) {
+    if (!onCancelFixedLesson || !person.fixedLessonId || cancelingFixedLessonId) {
+      return;
+    }
+
+    Alert.alert(
+      '고정수업 삭제',
+      `${person.userName} 회원의 ${slot.weekdayLabel} ${formatSlotHour(slot.startsAt)} 고정수업을 삭제할까요? 앞으로 같은 요일/시간 배정이 취소됩니다.`,
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '삭제',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setCancelingFixedLessonId(person.fixedLessonId ?? '');
+              await onCancelFixedLesson(person.fixedLessonId ?? '');
+            } catch (error) {
+              const message = error instanceof DatabaseError ? error.message : '고정수업을 삭제하지 못했습니다.';
+              Alert.alert('삭제 실패', message);
+            } finally {
+              setCancelingFixedLessonId(null);
             }
           }
         }
@@ -3070,9 +5116,9 @@ function AdminCalendarCell({
       setAssigning(true);
 
       if (selectedAssigned) {
-        await onCancelLessonReservation(currentSlot.id, selectedAssignmentMember.id);
+        await onCancelLessonReservation(slot.id, selectedAssignmentMember.id);
       } else {
-        await onAssignLessonReservation(currentSlot.id, selectedAssignmentMember.id);
+        await onAssignLessonReservation(slot.id, selectedAssignmentMember.id, 60);
       }
     } catch (error) {
       const message = error instanceof DatabaseError ? error.message : '회원 배정을 저장하지 못했습니다.';
@@ -3083,34 +5129,31 @@ function AdminCalendarCell({
   }
 
   return (
-    <View
-      style={[
-        styles.calendarSlotCell,
-        !isOpen && styles.calendarClosedSlotCell,
-        isOpen && (hasMemberAssignment ? styles.calendarAssignedSlotCell : styles.calendarUnassignedSlotCell),
-        isOpen && hasOpenSeat && styles.calendarOpenSlotCell,
-        isOpen && currentSlot.substitutes.length > 0 && styles.calendarBookedSlotCell
-      ]}
-    >
-      <View style={styles.calendarCellTopRow}>
-        {editing ? (
-          <TextInput
-            style={[styles.input, styles.calendarInstructorInput]}
-            value={instructor}
-            onChangeText={setInstructor}
-            placeholder="강사"
-            placeholderTextColor={colors.muted}
-          />
-        ) : (
-          <View style={styles.calendarInstructorBlock}>
-            <Text style={styles.calendarInstructorChip} numberOfLines={1}>
-              {currentSlot.instructor}
-            </Text>
-            <Text style={styles.calendarDurationChip}>{formatLessonDuration(currentSlot.durationMinutes)}</Text>
-          </View>
-        )}
-        <Text style={[styles.calendarAssignmentBadge, !hasMemberAssignment && styles.calendarAssignmentBadgeEmpty, !isOpen && styles.calendarAssignmentBadgeClosed]}>
-          {!isOpen ? '닫힘' : hasMemberAssignment ? '배정' : '미배정'}
+    <View style={[styles.weekLessonRow, !isOpen && styles.weekLessonRowClosed]}>
+      <View style={styles.weekLessonTopRow}>
+        <View style={styles.adminReservationTime}>
+          <Text style={styles.adminReservationDay}>{slot.weekdayLabel}</Text>
+          <Text style={styles.adminReservationHour}>{formatSlotHour(slot.startsAt)}</Text>
+        </View>
+        <View style={styles.adminReservationCopy}>
+          {editing ? (
+            <TextInput
+              style={[styles.input, styles.inlineInstructorInput]}
+              value={instructor}
+              onChangeText={setInstructor}
+              placeholder="강사"
+              placeholderTextColor={colors.muted}
+            />
+          ) : (
+            <Text style={styles.adminReservationName}>{slot.instructor} 강사</Text>
+          )}
+          <Text style={styles.adminReservationMeta}>
+            {isOpen ? `열림 · 출석 ${occupiedCount}명` : '닫힘'} · {formatLessonDuration(slot.durationMinutes)}
+            {slot.openSeatCount > 0 ? ` · 빈자리 ${slot.openSeatCount}개` : ''}
+          </Text>
+        </View>
+        <Text style={[styles.timelineBadge, isOpen ? styles.statusBadgeSuccess : styles.timelineBadgePast]}>
+          {isOpen ? '열림' : '닫힘'}
         </Text>
       </View>
 
@@ -3125,7 +5168,6 @@ function AdminCalendarCell({
                 style={[styles.lessonDurationButton, selected && styles.lessonDurationButtonActive]}
                 onPress={() => setDurationMinutes(duration)}
                 accessibilityRole="button"
-                accessibilityLabel={`${formatLessonDuration(duration)} 수업 선택`}
               >
                 <Text style={[styles.lessonDurationButtonText, selected && styles.lessonDurationButtonTextActive]}>
                   {formatLessonDuration(duration)}
@@ -3136,14 +5178,30 @@ function AdminCalendarCell({
         </View>
       ) : null}
 
-      <View style={styles.calendarMemberLines}>
-        {fixedNames ? (
-          <Text style={styles.calendarMemberPrimaryText} numberOfLines={2}>
-            {fixedNames}
-          </Text>
-        ) : null}
-        {currentSlot.substitutes.map((person) => (
-          <View key={`${person.userId}-${person.createdAt}`} style={styles.calendarSubstituteRow}>
+      <View style={styles.weekLessonPeople}>
+        {attendingFixedMembers.map((person) => {
+          const cancelingFixed = cancelingFixedLessonId === person.fixedLessonId;
+
+          return (
+            <View key={`${person.fixedLessonId ?? person.userId}-${person.userName}`} style={styles.weekSubstituteRow}>
+              <Text style={styles.calendarMemberPrimaryText} numberOfLines={1}>
+                고정 {person.userName}
+              </Text>
+              {onCancelFixedLesson && person.fixedLessonId ? (
+                <Pressable
+                  style={[styles.calendarInlineCancelButton, cancelingFixed && styles.disabledButton]}
+                  onPress={() => confirmCancelFixedMember(person)}
+                  disabled={cancelingFixed}
+                  accessibilityRole="button"
+                >
+                  <Feather name="x" size={13} color={colors.danger} />
+                </Pressable>
+              ) : null}
+            </View>
+          );
+        })}
+        {slot.substitutes.map((person) => (
+          <View key={`${person.userId}-${person.createdAt}`} style={styles.weekSubstituteRow}>
             <Text style={[styles.calendarMemberText, styles.calendarSubstituteText, styles.calendarSubstituteName]} numberOfLines={1}>
               개별 {person.userName}
             </Text>
@@ -3151,88 +5209,71 @@ function AdminCalendarCell({
               style={[styles.calendarInlineCancelButton, assigning && styles.disabledButton]}
               onPress={() => cancelAssignedMember(person)}
               disabled={assigning}
-              accessibilityLabel={`${person.userName} 개별 배정 취소`}
               accessibilityRole="button"
             >
               <Feather name="x" size={13} color={colors.danger} />
             </Pressable>
           </View>
         ))}
-        {absenceNames ? (
-          <Text style={[styles.calendarMemberText, styles.calendarAbsenceText]} numberOfLines={2}>
-            결석 {absenceNames}
-          </Text>
-        ) : null}
-        {!fixedNames && currentSlot.substitutes.length === 0 && !absenceNames ? (
-          <>
-            <Text style={styles.calendarUnassignedTitle}>{isOpen ? '회원 미배정' : '수업 닫힘'}</Text>
-            <Text style={styles.calendarMutedText}>{isOpen ? '수업만 열려있음' : '열면 다시 운영됨'}</Text>
-          </>
+        {absenceNames ? <Text style={[styles.calendarMemberText, styles.calendarAbsenceText]}>결석 {absenceNames}</Text> : null}
+        {attendingFixedMembers.length === 0 && slot.substitutes.length === 0 && !absenceNames ? (
+          <Text style={styles.calendarMutedText}>배정된 회원 없음</Text>
         ) : null}
       </View>
 
-      <View style={styles.calendarCellFooter}>
-        <Text style={[styles.calendarOpenSeatText, hasOpenSeat && styles.calendarOpenSeatActiveText]}>
-          {!isOpen ? '닫힌 수업' : hasOpenSeat ? `빈자리 ${currentSlot.openSeatCount}` : `출석 ${occupiedCount}`}
-        </Text>
-        <View style={styles.calendarCellActions}>
-          {!isOpen ? (
-            <Pressable
-              style={[styles.calendarEditButton, saving && styles.disabledButton]}
-              onPress={openSlot}
-              disabled={saving}
-              accessibilityLabel="수업 열기"
-              accessibilityRole="button"
-            >
-              <Text style={styles.calendarEditButtonText}>열기</Text>
-            </Pressable>
-          ) : (
-            <>
-              {selectedAssignmentMember ? (
-                <Pressable
-                  style={[
-                    styles.calendarAssignButton,
-                    selectedAssigned && styles.calendarAssignButtonActive,
-                    (assigning || selectedAlreadyFixed) && styles.disabledButton
-                  ]}
-                  onPress={toggleAssignment}
-                  disabled={assigning || selectedAlreadyFixed}
-                  accessibilityLabel={selectedAssigned ? '회원 배정 취소' : '회원 배정'}
-                  accessibilityRole="button"
-                >
-                  <Text style={[styles.calendarAssignButtonText, selectedAssigned && styles.calendarAssignButtonTextActive]}>
-                    {selectedAlreadyFixed ? '고정' : selectedAssigned ? '배정취소' : '배정'}
-                  </Text>
-                </Pressable>
-              ) : null}
-	              <Pressable
-	                style={[styles.calendarEditButton, saving && styles.disabledButton]}
-	                onPress={editing ? saveSlotDetails : () => setEditing(true)}
-	                disabled={saving}
-	                accessibilityLabel={editing ? '수업 저장' : '강사 변경'}
-	                accessibilityRole="button"
-	              >
-	                <Text style={styles.calendarEditButtonText}>{editing ? '저장' : '강사'}</Text>
-	              </Pressable>
+      <View style={styles.weekLessonActions}>
+        {!isOpen ? (
+          <Pressable
+            style={[styles.requestApproveButton, saving && styles.disabledButton]}
+            onPress={openSlot}
+            disabled={saving}
+            accessibilityRole="button"
+          >
+            <Feather name="unlock" size={16} color={colors.white} />
+            <Text style={styles.requestApproveText}>{saving ? '여는중' : '열기'}</Text>
+          </Pressable>
+        ) : (
+          <>
+            {selectedAssignmentMember ? (
               <Pressable
-                style={[styles.calendarDeleteButton, deleting && styles.disabledButton]}
-                onPress={confirmCancelSlot}
-                disabled={deleting}
-                accessibilityLabel="수업 닫기"
+                style={[
+                  styles.requestNeutralButton,
+                  selectedAssigned && styles.requestRejectButton,
+                  (assigning || selectedAlreadyFixed) && styles.disabledButton
+                ]}
+                onPress={toggleAssignment}
+                disabled={assigning || selectedAlreadyFixed}
                 accessibilityRole="button"
               >
-                <Text style={styles.calendarDeleteButtonText}>닫기</Text>
+                <Feather name={selectedAssigned ? 'x' : 'user-plus'} size={16} color={selectedAssigned ? colors.danger : colors.blue700} />
+                <Text style={selectedAssigned ? styles.requestRejectText : styles.secondaryActionText}>
+                  {selectedAlreadyFixed ? '고정수업' : selectedAssigned ? '배정취소' : '회원배정'}
+                </Text>
               </Pressable>
-            </>
-          )}
-        </View>
+            ) : null}
+            <Pressable
+              style={[styles.requestNeutralButton, saving && styles.disabledButton]}
+              onPress={editing ? saveSlotDetails : () => setEditing(true)}
+              disabled={saving}
+              accessibilityRole="button"
+            >
+              <Feather name={editing ? 'save' : 'edit-2'} size={16} color={colors.blue700} />
+              <Text style={styles.secondaryActionText}>{editing ? '저장' : '강사·시간'}</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.requestRejectButton, deleting && styles.disabledButton]}
+              onPress={confirmCancelSlot}
+              disabled={deleting}
+              accessibilityRole="button"
+            >
+              <Feather name="lock" size={16} color={colors.danger} />
+              <Text style={styles.requestRejectText}>{deleting ? '닫는중' : '닫기'}</Text>
+            </Pressable>
+          </>
+        )}
       </View>
     </View>
   );
-}
-
-function getCalendarSlotKey(date: string, startMinutes: number) {
-  return `${date}-${startMinutes}`;
 }
 
 function formatMinuteLabel(startMinutes: number) {
@@ -3377,6 +5418,7 @@ interface FixedLessonDraft {
   startMinutes: number;
   timeLabel: string;
   instructor: string;
+  durationMinutes: number;
   lessonCapacity: number;
 }
 
@@ -3399,6 +5441,7 @@ function getMemberFixedLessonDrafts(slots: ClassSlot[], memberId: string) {
       startMinutes: slot.startMinutes,
       timeLabel: formatSlotHour(slot.startsAt),
       instructor: slot.instructor,
+      durationMinutes: fixedMember.durationMinutes ?? slot.durationMinutes ?? 60,
       lessonCapacity: Math.min(Math.max(fixedMember.lessonCapacity ?? slot.capacity, 1), 3)
     });
   });
@@ -3430,6 +5473,7 @@ function AdminMemberOverview({
     weekday: number,
     hour: number,
     minute: number,
+    durationMinutes: number,
     fixedLessonId?: string | null
   ) => Promise<void>;
   onCancelFixedLesson: (fixedLessonId: string) => Promise<void>;
@@ -3443,24 +5487,24 @@ function AdminMemberOverview({
   const [memberQuery, setMemberQuery] = useState('');
   const [lessonWeekday, setLessonWeekday] = useState('1');
   const [lessonTime, setLessonTime] = useState('19:00');
+  const [lessonDuration, setLessonDuration] = useState(60);
   const [savingLesson, setSavingLesson] = useState(false);
+  const memberList = useMemo(() => members.filter((member) => member.role === 'member'), [members]);
   const memberOptions = useMemo(() => {
     const query = memberQuery.trim().toLowerCase();
 
-    return members
-      .filter((member) => member.role === 'member')
-      .filter((member) => {
-        if (!query) {
-          return true;
-        }
+    return memberList.filter((member) => {
+      if (!query) {
+        return true;
+      }
 
-        return (
-          member.name.toLowerCase().includes(query) ||
-          member.email.toLowerCase().includes(query) ||
-          formatPhoneNumber(member.phone).includes(query)
-        );
-      });
-  }, [memberQuery, members]);
+      return (
+        member.name.toLowerCase().includes(query) ||
+        member.email.toLowerCase().includes(query) ||
+        formatPhoneNumber(member.phone).includes(query)
+      );
+    });
+  }, [memberList, memberQuery]);
   const selectedMember = useMemo(() => {
     return memberOptions.find((member) => member.id === selectedMemberId) ?? memberOptions[0] ?? null;
   }, [memberOptions, selectedMemberId]);
@@ -3515,6 +5559,7 @@ function AdminMemberOverview({
 
     setLessonWeekday(String(firstDraft?.weekday ?? 1));
     setLessonTime(firstDraft?.timeLabel ?? '19:00');
+    setLessonDuration(firstDraft?.durationMinutes ?? 60);
     setEditingFixedLessonId(firstDraft?.id ?? null);
     setEditingLessonMemberId(member.id);
   }
@@ -3522,12 +5567,14 @@ function AdminMemberOverview({
   function editFixedLessonDraft(draft: FixedLessonDraft) {
     setLessonWeekday(String(draft.weekday));
     setLessonTime(draft.timeLabel);
+    setLessonDuration(draft.durationMinutes);
     setEditingFixedLessonId(draft.id);
   }
 
   function startNewFixedLesson() {
     setLessonWeekday('1');
     setLessonTime('19:00');
+    setLessonDuration(60);
     setEditingFixedLessonId(null);
   }
 
@@ -3544,9 +5591,14 @@ function AdminMemberOverview({
       return;
     }
 
+    if (timeParts.hour < POOL_OPEN_HOUR || timeParts.hour > POOL_CLOSE_HOUR) {
+      Alert.alert('영업시간 확인', '고정 수업은 05:00부터 22:00 사이에만 등록할 수 있습니다.');
+      return;
+    }
+
     try {
       setSavingLesson(true);
-      await onSaveFixedLesson(member.id, weekday, timeParts.hour, timeParts.minute, editingFixedLessonId);
+      await onSaveFixedLesson(member.id, weekday, timeParts.hour, timeParts.minute, lessonDuration, editingFixedLessonId);
       setEditingLessonMemberId(null);
       setEditingFixedLessonId(null);
     } catch (error) {
@@ -3613,12 +5665,12 @@ function AdminMemberOverview({
         <Text style={styles.adminOverviewCount}>{members.length}명</Text>
       </View>
 
-      {members.filter((member) => member.role === 'member').length === 0 ? (
+      {memberList.length === 0 ? (
         <View style={styles.emptyState}>
           <Feather name="users" size={22} color={colors.blue700} />
           <Text style={styles.emptyStateText}>가입된 회원이 없습니다.</Text>
         </View>
-      ) : selectedMember ? (
+      ) : (
         <>
           <TextInput
             style={styles.input}
@@ -3637,7 +5689,7 @@ function AdminMemberOverview({
               </View>
             ) : (
               memberOptions.map((member) => {
-                const selected = selectedMember.id === member.id;
+                const selected = selectedMember?.id === member.id;
                 const memberLessons = getMemberLessonLabels(slots, member.id);
 
                 return (
@@ -3662,7 +5714,7 @@ function AdminMemberOverview({
             )}
           </ScrollView>
 
-          {(() => {
+          {selectedMember ? (() => {
             const member = selectedMember;
             const adjusting = adjustingMemberId === member.id;
             const editingLesson = editingLessonMemberId === member.id;
@@ -3755,7 +5807,7 @@ function AdminMemberOverview({
                                   {draft.weekdayLabel} {draft.timeLabel}
                                 </Text>
                                 <Text style={styles.fixedLessonManageMeta}>
-                                  {draft.instructor} 강사
+                                  {draft.instructor} 강사 · {formatLessonDuration(draft.durationMinutes)}
                                 </Text>
                               </View>
                               <View style={styles.fixedLessonManageActions}>
@@ -3792,24 +5844,23 @@ function AdminMemberOverview({
                       <Text style={styles.secondaryActionText}>새 수업</Text>
                     </Pressable>
 
-                    <View style={styles.fixedLessonEditorRow}>
-	                      <TextInput
-	                        style={[styles.input, styles.fixedLessonSmallInput]}
-	                        value={lessonWeekday}
-	                        onChangeText={setLessonWeekday}
-	                        keyboardType="number-pad"
-	                        placeholder="요일"
-	                        placeholderTextColor={colors.muted}
-	                      />
-	                      <TextInput
-	                        style={[styles.input, styles.fixedLessonSmallInput]}
-	                        value={lessonTime}
-	                        onChangeText={setLessonTime}
-	                        keyboardType="numbers-and-punctuation"
-	                        placeholder="13:30"
-	                        placeholderTextColor={colors.muted}
-	                      />
-	                    </View>
+                    <View style={styles.selectorBlock}>
+                      <Text style={styles.selectorLabel}>요일</Text>
+                      <WeekdaySelector value={Number(lessonWeekday)} onChange={(weekday) => setLessonWeekday(String(weekday))} />
+                    </View>
+                    <View style={styles.selectorBlock}>
+                      <Text style={styles.selectorLabel}>시간</Text>
+                      <DropdownSelect
+                        value={lessonTime}
+                        options={lessonTimeOptions.map((option) => ({ value: option.value, label: option.value }))}
+                        onChange={setLessonTime}
+                        placeholder="시작 시간 선택"
+                      />
+                    </View>
+                    <View style={styles.selectorBlock}>
+                      <Text style={styles.selectorLabel}>수업 길이</Text>
+                      <DurationSelector value={lessonDuration} onChange={setLessonDuration} />
+                    </View>
                     <Pressable
                       style={[styles.publishButton, savingLesson && styles.disabledButton]}
                       onPress={() => saveFixedLesson(member)}
@@ -3822,12 +5873,262 @@ function AdminMemberOverview({
                 ) : null}
               </>
             );
-          })()}
+          })() : null}
         </>
-      ) : (
+      )}
+    </View>
+  );
+}
+
+function AdminInstructorOverview({
+  slots,
+  instructorLessonTimes,
+  onSaveInstructorLessonTime,
+  onCancelInstructorLessonTime
+}: {
+  slots: ClassSlot[];
+  instructorLessonTimes: InstructorLessonTime[];
+  onSaveInstructorLessonTime: (input: SaveInstructorLessonTimeInput) => Promise<void>;
+  onCancelInstructorLessonTime: (timeId: string) => Promise<void>;
+}) {
+  const instructorNames = useMemo(() => {
+    const names = new Set<string>();
+
+    instructorLessonTimes.forEach((time) => names.add(time.instructor));
+    slots.forEach((slot) => {
+      if (slot.instructor.trim()) {
+        names.add(slot.instructor.trim());
+      }
+    });
+
+    return Array.from(names).sort((a, b) => a.localeCompare(b, 'ko-KR'));
+  }, [instructorLessonTimes, slots]);
+  const [selectedInstructor, setSelectedInstructor] = useState('');
+  const [editingTimeId, setEditingTimeId] = useState<string | null>(null);
+  const [instructorName, setInstructorName] = useState('');
+  const [selectedWeekdays, setSelectedWeekdays] = useState<number[]>([1]);
+  const [selectedLessonTimes, setSelectedLessonTimes] = useState<string[]>(['19:00']);
+  const [saving, setSaving] = useState(false);
+  const [cancelingTimeId, setCancelingTimeId] = useState<string | null>(null);
+  const selectedTimes = useMemo(
+    () =>
+      instructorLessonTimes
+        .filter((time) => time.instructor === selectedInstructor)
+        .sort((a, b) => a.weekday - b.weekday || a.startMinutes - b.startMinutes),
+    [instructorLessonTimes, selectedInstructor]
+  );
+  const weeklyCount = selectedTimes.length;
+
+  useEffect(() => {
+    if (!selectedInstructor && instructorNames[0]) {
+      setSelectedInstructor(instructorNames[0]);
+      setInstructorName(instructorNames[0]);
+      return;
+    }
+
+    if (selectedInstructor && !instructorNames.includes(selectedInstructor)) {
+      setSelectedInstructor(instructorNames[0] ?? '');
+      setInstructorName(instructorNames[0] ?? '');
+    }
+  }, [instructorNames, selectedInstructor]);
+
+  function selectInstructor(name: string) {
+    setSelectedInstructor(name);
+    setInstructorName(name);
+    setEditingTimeId(null);
+  }
+
+  function startNewInstructorTime() {
+    setEditingTimeId(null);
+    setInstructorName(selectedInstructor || instructorNames[0] || '');
+    setSelectedWeekdays([1]);
+    setSelectedLessonTimes(['19:00']);
+  }
+
+  function editInstructorTime(time: InstructorLessonTime) {
+    setEditingTimeId(time.id);
+    setInstructorName(time.instructor);
+    setSelectedWeekdays([time.weekday]);
+    setSelectedLessonTimes([time.timeLabel]);
+  }
+
+  async function saveTime() {
+    if (saving) {
+      return;
+    }
+
+    const normalizedInstructor = instructorName.trim();
+
+    if (!normalizedInstructor) {
+      Alert.alert('강사명 확인', '강사명을 입력해주세요.');
+      return;
+    }
+
+    const parsedTimes = selectedLessonTimes
+      .map((time) => ({ label: time, parts: parseLessonTimeInput(time) }))
+      .filter((item): item is { label: string; parts: { hour: number; minute: number } } => Boolean(item.parts));
+
+    if (selectedWeekdays.length === 0 || parsedTimes.length === 0) {
+      Alert.alert('시간 확인', '요일과 수업 시간을 선택해주세요.');
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const targetWeekdays = editingTimeId ? [selectedWeekdays[0]] : selectedWeekdays;
+      const targetTimes = editingTimeId ? [parsedTimes[0]] : parsedTimes;
+
+      for (const weekday of targetWeekdays) {
+        for (const time of targetTimes) {
+          await onSaveInstructorLessonTime({
+            id: editingTimeId,
+            instructor: normalizedInstructor,
+            weekday,
+            hour: time.parts.hour,
+            minute: time.parts.minute
+          });
+        }
+      }
+
+      setSelectedInstructor(normalizedInstructor);
+      setEditingTimeId(null);
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '강사 시간을 저장하지 못했습니다.';
+      Alert.alert('저장 실패', message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function confirmCancelTime(time: InstructorLessonTime) {
+    if (cancelingTimeId) {
+      return;
+    }
+
+    Alert.alert('강사 시간 삭제', `${time.instructor} 강사의 ${time.weekdayLabel} ${time.timeLabel} 배정을 삭제할까요?`, [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '삭제',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            setCancelingTimeId(time.id);
+            await onCancelInstructorLessonTime(time.id);
+            if (editingTimeId === time.id) {
+              startNewInstructorTime();
+            }
+          } catch (error) {
+            const message = error instanceof DatabaseError ? error.message : '강사 시간을 삭제하지 못했습니다.';
+            Alert.alert('삭제 실패', message);
+          } finally {
+            setCancelingTimeId(null);
+          }
+        }
+      }
+    ]);
+  }
+
+  return (
+    <View style={styles.adminOverview}>
+      <View style={styles.adminOverviewHeader}>
+        <View style={styles.feedbackCardTitleBlock}>
+          <Text style={styles.adminOverviewTitle}>강사 배정</Text>
+          <Text style={styles.requestMeta}>{selectedInstructor ? `${selectedInstructor} ${weeklyCount}개 시간` : '등록된 강사 없음'}</Text>
+        </View>
+        <Text style={styles.adminOverviewCount}>{instructorNames.length}명</Text>
+      </View>
+
+      {instructorNames.length > 0 ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.calendarAssignmentMemberList}>
+          {instructorNames.map((name) => {
+            const selected = selectedInstructor === name;
+
+            return (
+              <Pressable
+                key={name}
+                style={[styles.calendarAssignmentMemberChip, selected && styles.calendarAssignmentMemberChipActive]}
+                onPress={() => selectInstructor(name)}
+                accessibilityRole="button"
+              >
+                <Text style={[styles.calendarAssignmentMemberName, selected && styles.calendarAssignmentMemberNameActive]}>{name}</Text>
+                <Text style={[styles.calendarAssignmentMemberMeta, selected && styles.calendarAssignmentMemberMetaActive]}>
+                  {instructorLessonTimes.filter((time) => time.instructor === name).length}개
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      ) : null}
+
+      <View style={styles.fixedLessonEditor}>
+        <TextInput
+          style={styles.input}
+          value={instructorName}
+          onChangeText={setInstructorName}
+          placeholder="강사명"
+          placeholderTextColor={colors.muted}
+        />
+        <View style={styles.selectorBlock}>
+          <Text style={styles.selectorLabel}>요일</Text>
+          <MultiWeekdaySelector values={selectedWeekdays} onChange={setSelectedWeekdays} />
+        </View>
+        <View style={styles.selectorBlock}>
+          <Text style={styles.selectorLabel}>시간</Text>
+          <MultiLessonTimeSelector values={selectedLessonTimes} onChange={setSelectedLessonTimes} />
+        </View>
+        <View style={styles.composerActions}>
+          <Pressable style={styles.secondaryButton} onPress={startNewInstructorTime} accessibilityRole="button">
+            <Feather name="plus" size={17} color={colors.blue700} />
+            <Text style={styles.secondaryButtonText}>새 시간</Text>
+          </Pressable>
+          <Pressable style={[styles.publishButton, saving && styles.disabledButton]} onPress={saveTime} disabled={saving}>
+            <Feather name="save" size={17} color={colors.white} />
+            <Text style={styles.publishButtonText}>
+              {editingTimeId ? '변경 저장' : `${selectedWeekdays.length * selectedLessonTimes.length}개 등록`}
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+
+      {selectedTimes.length === 0 ? (
         <View style={styles.emptyState}>
-          <Feather name="search" size={22} color={colors.blue700} />
-          <Text style={styles.emptyStateText}>선택할 회원이 없습니다.</Text>
+          <Feather name="briefcase" size={22} color={colors.blue700} />
+          <Text style={styles.emptyStateText}>선택한 강사의 배정 시간이 없습니다.</Text>
+        </View>
+      ) : (
+        <View style={styles.fixedLessonManageList}>
+          {selectedTimes.map((time) => {
+            const selected = editingTimeId === time.id;
+            const canceling = cancelingTimeId === time.id;
+
+            return (
+              <View key={time.id} style={[styles.fixedLessonManageRow, selected && styles.fixedLessonManageRowActive]}>
+                <View style={styles.fixedLessonManageCopy}>
+                  <Text style={styles.fixedLessonManageTitle}>
+                    {time.weekdayLabel} {time.timeLabel}
+                  </Text>
+                  <Text style={styles.fixedLessonManageMeta}>{time.instructor} 강사</Text>
+                </View>
+                <View style={styles.fixedLessonManageActions}>
+                  <Pressable
+                    style={[styles.memberAdjustButton, selected && styles.memberAdjustButtonActive]}
+                    onPress={() => editInstructorTime(time)}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.memberAdjustButtonText}>수정</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.memberAdjustButton, styles.memberAdjustButtonDanger, canceling && styles.disabledButton]}
+                    onPress={() => confirmCancelTime(time)}
+                    disabled={canceling}
+                    accessibilityRole="button"
+                  >
+                    <Text style={[styles.memberAdjustButtonText, styles.memberAdjustButtonTextDanger]}>삭제</Text>
+                  </Pressable>
+                </View>
+              </View>
+            );
+          })}
         </View>
       )}
     </View>
@@ -3850,28 +6151,51 @@ function ReserveScreen({
   dateOptions,
   user,
   slots,
+  members,
   passBalance,
   prefs,
+  changeRequests,
+  absenceRequests,
   assignmentRequests,
+  lessonFeedbackTargets,
   onAbsence,
+  onCancelAbsenceRequest,
   onCreateAssignmentRequest,
-  onCancelAssignmentRequest
+  onCancelAssignmentRequest,
+  onCancelMyLessonReservation,
+  onCreateLessonSlot,
+  onUpdateLessonSlot,
+  onAssignLessonReservation,
+  onCancelLessonReservation,
+  onCancelLessonSlot,
+  onCancelFixedLessonAttendance,
+  onPublishLessonFeedback
 }: {
   selectedDate: string;
   setSelectedDate: (date: string) => void;
   dateOptions: DayOption[];
   user: User;
   slots: ClassSlot[];
+  members: MemberSummary[];
   passBalance: number;
   prefs: NotificationPrefs;
+  changeRequests: LessonChangeRequest[];
+  absenceRequests: LessonAbsenceRequest[];
   assignmentRequests: LessonAssignmentRequest[];
+  lessonFeedbackTargets: LessonFeedbackTarget[];
   onAbsence: (slot: ClassSlot) => Promise<AbsenceAction>;
+  onCancelAbsenceRequest: (requestId: string) => Promise<void>;
   onCreateAssignmentRequest: (slotId: string, requestType: LessonAssignmentRequestType) => Promise<void>;
   onCancelAssignmentRequest: (requestId: string) => Promise<void>;
+  onCancelMyLessonReservation: (slotId: string) => Promise<void>;
+  onCreateLessonSlot: (slotDate: string, hour: number, minute: number, instructor: string, durationMinutes: number) => Promise<void>;
+  onUpdateLessonSlot: (slotId: string, instructor: string, durationMinutes: number, capacity: number) => Promise<void>;
+  onAssignLessonReservation: (slotId: string, memberId: string, durationMinutes: number) => Promise<void>;
+  onCancelLessonReservation: (slotId: string, memberId: string) => Promise<void>;
+  onCancelLessonSlot: (slotId: string) => Promise<void>;
+  onCancelFixedLessonAttendance: (slotId: string, fixedLessonId: string) => Promise<void>;
+  onPublishLessonFeedback: (input: PublishLessonFeedbackInput) => Promise<void>;
 }) {
-  const daySlots = slots.filter((slot) => slot.date === selectedDate && isVisibleLessonSlot(slot, user)).sort(sortSlotsByStartsAt);
-  const requestableCount = daySlots.filter((slot) => isUnassignedOpenLesson(slot) || isFreeSwimCandidateSlot(slot)).length;
-  const substituteCount = slots.reduce((count, slot) => count + slot.substitutes.length, 0);
   const pendingAssignmentBySlot = useMemo(() => {
     return assignmentRequests
       .filter((request) => request.status === 'pending')
@@ -3880,8 +6204,65 @@ function ReserveScreen({
         return map;
       }, new Map());
   }, [assignmentRequests]);
+  const pendingAbsenceBySlot = useMemo(() => {
+    return absenceRequests
+      .filter((request) => request.status === 'pending')
+      .reduce<Map<string, LessonAbsenceRequest>>((map, request) => {
+        map.set(request.slotId, request);
+        return map;
+      }, new Map());
+  }, [absenceRequests]);
+  const pendingChangeBySource = useMemo(() => {
+    return changeRequests
+      .filter((request) => request.status === 'pending')
+      .reduce<Map<string, LessonChangeRequest>>((map, request) => {
+        map.set(request.sourceSlotId, request);
+        return map;
+      }, new Map());
+  }, [changeRequests]);
+
+  const daySlots = slots
+    .filter((slot) => {
+      if (slot.date !== selectedDate) {
+        return false;
+      }
+
+      if (user.role === 'admin') {
+        return isVisibleLessonSlot(slot, user);
+      }
+
+      return (
+        isFixedLessonForUser(slot, user) ||
+        isReservedByUser(slot, user) ||
+        pendingAssignmentBySlot.has(slot.id) ||
+        (passBalance > 0 && isWithinRequestableWindow(slot) && isUnassignedOpenLesson(slot)) ||
+        (isWithinRequestableWindow(slot) && isFreeSwimCandidateSlot(slot))
+      );
+    })
+    .sort(sortSlotsByStartsAt);
   const [submittingSlotId, setSubmittingSlotId] = useState<string | null>(null);
   const [cancelingRequestId, setCancelingRequestId] = useState<string | null>(null);
+  const todayKey = getTodayKey();
+
+  if (user.role === 'admin') {
+    return (
+      <AdminLessonTabScreen
+        selectedDate={selectedDate}
+        setSelectedDate={setSelectedDate}
+        dateOptions={dateOptions}
+        slots={slots}
+        members={members}
+        lessonFeedbackTargets={lessonFeedbackTargets}
+        onOpenLessonSlot={onCreateLessonSlot}
+        onUpdateLessonSlot={onUpdateLessonSlot}
+        onAssignLessonReservation={onAssignLessonReservation}
+        onCancelLessonReservation={onCancelLessonReservation}
+        onCancelLessonSlot={onCancelLessonSlot}
+        onCancelFixedLessonAttendance={onCancelFixedLessonAttendance}
+        onPublishLessonFeedback={onPublishLessonFeedback}
+      />
+    );
+  }
 
   async function toggleAbsence(slot: ClassSlot) {
     if (user.role === 'admin') {
@@ -3893,16 +6274,33 @@ function ReserveScreen({
       const action = await onAbsence(slot);
       const slotLabel = `${slot.shortDateLabel} ${formatSlotHour(slot.startsAt)}`;
 
-      if (action === 'absenceCreated' && prefs.reservation) {
-        await sendLocalNotification('결석 처리', `${slotLabel} 고정 수업이 빈자리로 열렸습니다.`);
+      if (action === 'absenceRequested' && prefs.reservation) {
+        await sendLocalNotification('수업 취소 요청 접수', `${slotLabel} 고정 수업 취소 요청이 관리자에게 전달되었습니다.`);
+        Alert.alert('요청 완료', '관리자 승인 후 수업이 취소되고 빈자리로 공개됩니다.');
       }
 
       if (action === 'absenceCanceled' && prefs.reservation) {
-        await sendLocalNotification('결석 취소', `${slotLabel} 고정 수업 결석 처리가 취소되었습니다.`);
+        await sendLocalNotification('수업 취소 철회', `${slotLabel} 고정 수업 취소 처리가 철회되었습니다.`);
       }
     } catch (error) {
-      const message = error instanceof DatabaseError ? error.message : '결석 처리 내용을 저장하지 못했습니다.';
-      Alert.alert('결석 처리 실패', message);
+      const message = error instanceof DatabaseError ? error.message : '수업 취소 내용을 저장하지 못했습니다.';
+      Alert.alert('수업 취소 실패', message);
+    }
+  }
+
+  async function cancelAbsenceRequest(request: LessonAbsenceRequest) {
+    if (cancelingRequestId) {
+      return;
+    }
+
+    try {
+      setCancelingRequestId(request.id);
+      await onCancelAbsenceRequest(request.id);
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '수업 취소 요청을 취소하지 못했습니다.';
+      Alert.alert('취소 실패', message);
+    } finally {
+      setCancelingRequestId(null);
     }
   }
 
@@ -3921,8 +6319,8 @@ function ReserveScreen({
     const slotLabel = `${slot.shortDateLabel} ${formatSlotHour(slot.startsAt)}`;
     const requestDescription =
       requestType === 'free_swim'
-        ? `${slotLabel}은 수업이 닫힌 시간이라 자유수영 신청으로 접수됩니다.`
-        : `${slotLabel}은 수업이 열려 있는 시간이라 추가 수업 신청으로 접수됩니다.`;
+        ? `${slotLabel} 자유수영을 신청합니다.`
+        : `${slotLabel} 추가 수업을 신청합니다.`;
 
     Alert.alert(`${requestLabel} 신청`, `${requestDescription}\n관리자에게 신청할까요?`, [
       { text: '취소', style: 'cancel' },
@@ -3965,6 +6363,37 @@ function ReserveScreen({
     }
   }
 
+  function cancelAssignedLesson(slot: ClassSlot) {
+    if (submittingSlotId) {
+      return;
+    }
+
+    const slotLabel = `${slot.shortDateLabel} ${formatSlotHour(slot.startsAt)}`;
+
+    Alert.alert('수업 취소', `${slotLabel} 수업을 취소할까요?`, [
+      { text: '닫기', style: 'cancel' },
+      {
+        text: '취소',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            setSubmittingSlotId(slot.id);
+            await onCancelMyLessonReservation(slot.id);
+
+            if (prefs.reservation) {
+              await sendLocalNotification('수업 취소', `${slotLabel} 수업이 취소되었습니다.`);
+            }
+          } catch (error) {
+            const message = error instanceof DatabaseError ? error.message : '수업을 취소하지 못했습니다.';
+            Alert.alert('취소 실패', message);
+          } finally {
+            setSubmittingSlotId(null);
+          }
+        }
+      }
+    ]);
+  }
+
   return (
     <View style={styles.screenBody}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.daySelector}>
@@ -3983,20 +6412,19 @@ function ReserveScreen({
 
       <View style={styles.passSummary}>
         <View style={styles.passSummaryStat}>
-          <Feather name={user.role === 'admin' ? 'check-circle' : 'credit-card'} size={22} color={colors.blue700} />
-          <Text style={styles.passSummaryValue}>{user.role === 'admin' ? `${substituteCount}건` : `${passBalance}회`}</Text>
-        </View>
-        <View style={styles.passSummaryBadge}>
-          <Feather name="unlock" size={16} color={colors.blue700} />
-          <Text style={styles.passSummaryBadgeText}>신청 가능 {requestableCount}</Text>
+          <Feather name="credit-card" size={22} color={colors.blue700} />
+          <View>
+            <Text style={styles.passSummaryLabel}>남은 수업권</Text>
+            <Text style={styles.passSummaryValue}>{passBalance}회</Text>
+          </View>
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.slotList} showsVerticalScrollIndicator={false}>
+      <KeyboardAwareScrollView contentContainerStyle={styles.slotList} showsVerticalScrollIndicator={false}>
         {daySlots.length === 0 ? (
           <View style={styles.emptyState}>
             <Feather name="calendar" size={22} color={colors.blue700} />
-            <Text style={styles.emptyStateText}>이 날짜에는 표시할 고정 수업이나 빈자리가 없습니다.</Text>
+            <Text style={styles.emptyStateText}>이 날짜에는 표시할 수업이 없습니다.</Text>
           </View>
         ) : null}
         {daySlots.map((slot) => {
@@ -4004,21 +6432,30 @@ function ReserveScreen({
           const assignedMine = isReservedByUser(slot, user);
           const absenceMine = isAbsentByUser(slot, user);
           const pendingRequest = pendingAssignmentBySlot.get(slot.id);
+          const pendingAbsenceRequest = fixedMine ? pendingAbsenceBySlot.get(slot.id) : undefined;
+          const pendingChangeRequest = fixedMine ? pendingChangeBySource.get(slot.id) : undefined;
           const assignedBySomeone = hasAnyAssignedMember(slot);
-          const unassignedOpen = isUnassignedOpenLesson(slot);
-          const freeSwimCandidate = isFreeSwimCandidateSlot(slot);
+          const canShowRequestableSlot = user.role === 'admin' || isWithinRequestableWindow(slot);
+          const unassignedOpen = canShowRequestableSlot && isUnassignedOpenLesson(slot);
+          const freeSwimCandidate = canShowRequestableSlot && isFreeSwimCandidateSlot(slot);
+          const absenceRequestClosed = fixedMine && !absenceMine && !pendingAbsenceRequest && slot.date <= todayKey;
+          const assignedCancellationClosed = assignedMine && slot.date <= todayKey;
           const absenceCancellationBlocked = absenceMine && slot.substitutes.length >= slot.absences.length;
           const canRequestExtra = user.role === 'member' && unassignedOpen && !pendingRequest && passBalance > 0;
           const canRequestFreeSwim = user.role === 'member' && freeSwimCandidate && !pendingRequest;
           const isRequesting = submittingSlotId === slot.id;
           const isCancelingRequest = pendingRequest ? cancelingRequestId === pendingRequest.id : false;
-          const noPass = user.role === 'member' && unassignedOpen && !pendingRequest && passBalance <= 0;
+          const isCancelingAbsence = pendingAbsenceRequest ? cancelingRequestId === pendingAbsenceRequest.id : false;
           const disabled =
             user.role === 'admin' ||
             isRequesting ||
             isCancelingRequest ||
+            isCancelingAbsence ||
+            (fixedMine && Boolean(pendingChangeRequest)) ||
+            absenceRequestClosed ||
+            assignedCancellationClosed ||
             (fixedMine && absenceCancellationBlocked) ||
-            (!fixedMine && !pendingRequest && !canRequestExtra && !canRequestFreeSwim);
+            (!fixedMine && !assignedMine && !pendingRequest && !canRequestExtra && !canRequestFreeSwim);
           const buttonLabel = (() => {
             if (user.role === 'admin') {
               return '확인';
@@ -4029,11 +6466,15 @@ function ReserveScreen({
             }
 
             if (fixedMine && absenceMine) {
-              return '결석취소';
+              return '취소철회';
+            }
+
+            if (fixedMine && pendingAbsenceRequest) {
+              return isCancelingAbsence ? '취소중' : '요청취소';
             }
 
             if (fixedMine) {
-              return '결석';
+              return absenceRequestClosed ? '마감' : '취소';
             }
 
             if (pendingRequest) {
@@ -4041,19 +6482,15 @@ function ReserveScreen({
             }
 
             if (assignedMine) {
-              return '배정됨';
+              return assignedCancellationClosed ? '마감' : isRequesting ? '취소중' : '취소';
             }
 
             if (canRequestExtra) {
-              return isRequesting ? '신청중' : '수업신청';
+              return isRequesting ? '신청중' : '추가신청';
             }
 
             if (canRequestFreeSwim) {
               return isRequesting ? '신청중' : '자유수영';
-            }
-
-            if (noPass) {
-              return '횟수';
             }
 
             if (assignedBySomeone) {
@@ -4063,53 +6500,92 @@ function ReserveScreen({
             return slot.isActive ? '마감' : '닫힘';
           })();
           const statusColor = fixedMine
-            ? absenceMine
+            ? pendingAbsenceRequest
+              ? colors.warning
+              : absenceMine
               ? colors.warning
               : colors.success
             : assignedMine
               ? colors.success
-              : pendingRequest
-                ? colors.warning
-                : unassignedOpen
+            : pendingRequest
+              ? colors.warning
+              : unassignedOpen
                 ? colors.aqua500
                 : freeSwimCandidate
                   ? colors.blue700
                   : assignedBySomeone
                     ? colors.blue600
                     : colors.muted;
-          const slotMeta = fixedMine
-            ? absenceMine
-              ? slot.substitutes.length > 0
-                ? `내 결석 · 대체 ${slot.substitutes.length}/${slot.absences.length}`
-                : '내 결석 · 빈자리 공개'
-              : slot.openSeatCount > 0
-                ? `내 고정 수업 · 빈자리 ${slot.openSeatCount}개`
-                : '내 고정 수업'
-            : assignedMine
-              ? slot.isActive
-                ? '내 추가 수업'
-                : '내 자유수영'
-              : pendingRequest
-                ? `${formatAssignmentRequestType(pendingRequest.requestType)} 승인 대기`
-                : assignedBySomeone
-                  ? slot.isActive
-                    ? '다른 회원 배정'
-                    : '닫힌 시간 · 배정 있음'
-                  : unassignedOpen
-                    ? '수업 열림 · 배정 없음'
-                    : freeSwimCandidate
-                      ? '수업 닫힘 · 자유수영 가능'
-                      : slot.isActive
-                        ? '수업 열림'
-                        : '수업 닫힘';
+          const slotMeta = (() => {
+            if (fixedMine) {
+              if (pendingChangeRequest) {
+                return `변경 대기 · ${formatSlotBrief(pendingChangeRequest.targetStartsAt)}`;
+              }
+
+              if (pendingAbsenceRequest) {
+                return '취소 승인 대기';
+              }
+
+              if (absenceMine) {
+                return '취소된 수업';
+              }
+
+              if (absenceRequestClosed) {
+                return '수업 취소 마감';
+              }
+
+              return '내 고정 수업';
+            }
+
+            if (assignedMine) {
+              if (assignedCancellationClosed) {
+                return slot.isActive ? '추가 수업 취소 마감' : '자유수영 취소 마감';
+              }
+
+              return slot.isActive ? '내 추가 수업' : '내 자유수영';
+            }
+
+            if (pendingRequest) {
+              return `${formatAssignmentRequestType(pendingRequest.requestType)} 승인 대기`;
+            }
+
+            if (user.role === 'admin') {
+              if (assignedBySomeone) {
+                return slot.isActive ? '다른 회원 배정' : '닫힌 시간 · 배정 있음';
+              }
+
+              if (unassignedOpen) {
+                return '수업 열림 · 배정 없음';
+              }
+
+              if (freeSwimCandidate) {
+                return '수업 닫힘 · 자유수영 가능';
+              }
+
+              return slot.isActive ? '수업 열림' : '수업 닫힘';
+            }
+
+            return '';
+          })();
+          const showSlotMeta = Boolean(slotMeta);
           const handlePress = () => {
             if (fixedMine) {
+              if (pendingAbsenceRequest) {
+                void cancelAbsenceRequest(pendingAbsenceRequest);
+                return;
+              }
+
               void toggleAbsence(slot);
               return;
             }
 
             if (pendingRequest) {
               void cancelAssignmentRequest(pendingRequest);
+              return;
+            }
+
+            if (assignedMine) {
+              cancelAssignedLesson(slot);
               return;
             }
 
@@ -4122,15 +6598,32 @@ function ReserveScreen({
               void requestAssignment(slot, 'free_swim');
             }
           };
+          const fixedAbsenceLabel = pendingAbsenceRequest
+            ? isCancelingAbsence
+              ? '취소중'
+              : '요청취소'
+            : absenceMine
+              ? absenceCancellationBlocked
+                ? '대체완료'
+                : '취소철회'
+              : absenceRequestClosed
+                ? '마감'
+                : '취소';
           const metaIcon = fixedMine || assignedMine
             ? 'user'
             : pendingRequest
               ? 'clock'
-              : assignedBySomeone
-                ? 'users'
-                : unassignedOpen || freeSwimCandidate
+              : unassignedOpen || freeSwimCandidate
                   ? 'plus-circle'
-                  : 'lock';
+                  : assignedBySomeone
+                    ? 'users'
+                    : 'lock';
+          const showSlotActionButton =
+            user.role === 'admin' ||
+            assignedMine ||
+            Boolean(pendingRequest) ||
+            canRequestExtra ||
+            canRequestFreeSwim;
           return (
             <View key={slot.id} style={[styles.slotCard, (fixedMine || assignedMine) && styles.slotCardReserved]}>
               <View style={styles.slotTimeBlock}>
@@ -4141,39 +6634,825 @@ function ReserveScreen({
                 <Text style={styles.slotTitle}>
                   {slot.instructor} 강사 · {formatLessonDuration(slot.durationMinutes)}
                 </Text>
-                <View style={styles.slotMetaRow}>
-                  <Feather name={metaIcon} size={13} color={statusColor} />
-                  <Text style={styles.slotMeta}>{slotMeta}</Text>
-                  {unassignedOpen || freeSwimCandidate ? <Text style={styles.waitlistText}>신청 가능</Text> : null}
-                </View>
+                {showSlotMeta ? (
+                  <View style={styles.slotMetaRow}>
+                    <Feather name={metaIcon} size={13} color={statusColor} />
+                    <Text style={styles.slotMeta}>{slotMeta}</Text>
+                  </View>
+                ) : null}
               </View>
-              <Pressable
-                style={[
-                  styles.reserveButton,
-                  (pendingRequest || (fixedMine && absenceMine && !absenceCancellationBlocked)) && styles.cancelButton,
-                  (disabled || canRequestExtra || canRequestFreeSwim) && !fixedMine && !pendingRequest && styles.waitButton,
-                  disabled && styles.disabledButton
-                ]}
-                onPress={handlePress}
-                disabled={disabled}
-                accessibilityLabel={buttonLabel}
-                accessibilityRole="button"
-              >
-                <Text
+              {fixedMine ? (
+                <View style={styles.slotActionGroup}>
+                  <Pressable
+                    style={[
+                      styles.reserveButton,
+                      styles.compactReserveButton,
+                      (pendingAbsenceRequest || (absenceMine && !absenceCancellationBlocked)) && styles.cancelButton,
+                      disabled && styles.disabledButton
+                    ]}
+                    onPress={handlePress}
+                    disabled={disabled}
+                    accessibilityLabel={fixedAbsenceLabel}
+                    accessibilityRole="button"
+                  >
+                    <Text
+                      style={[
+                        styles.reserveButtonText,
+                        styles.compactReserveButtonText,
+                        (pendingAbsenceRequest || (absenceMine && !absenceCancellationBlocked)) && styles.cancelButtonText
+                      ]}
+                    >
+                      {fixedAbsenceLabel}
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : showSlotActionButton ? (
+                <Pressable
                   style={[
-                    styles.reserveButtonText,
-                    (pendingRequest || (fixedMine && absenceMine && !absenceCancellationBlocked)) && styles.cancelButtonText,
-                    (disabled || canRequestExtra || canRequestFreeSwim) && !fixedMine && !pendingRequest && styles.waitButtonText
+                    styles.reserveButton,
+                    (pendingRequest || assignedMine) && styles.cancelButton,
+                    (disabled || canRequestExtra || canRequestFreeSwim) && !pendingRequest && !assignedMine && styles.waitButton,
+                    disabled && styles.disabledButton
                   ]}
+                  onPress={handlePress}
+                  disabled={disabled}
+                  accessibilityLabel={buttonLabel}
+                  accessibilityRole="button"
                 >
-                  {buttonLabel}
-                </Text>
-              </Pressable>
+                  <Text
+                    style={[
+                      styles.reserveButtonText,
+                      (pendingRequest || assignedMine) && styles.cancelButtonText,
+                      (disabled || canRequestExtra || canRequestFreeSwim) && !pendingRequest && !assignedMine && styles.waitButtonText
+                    ]}
+                  >
+                    {buttonLabel}
+                  </Text>
+                </Pressable>
+              ) : null}
             </View>
           );
         })}
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </View>
+  );
+}
+
+function AdminLessonTabScreen({
+  selectedDate,
+  setSelectedDate,
+  dateOptions,
+  slots,
+  members,
+  lessonFeedbackTargets,
+  onOpenLessonSlot,
+  onUpdateLessonSlot,
+  onAssignLessonReservation,
+  onCancelLessonReservation,
+  onCancelLessonSlot,
+  onCancelFixedLessonAttendance,
+  onPublishLessonFeedback
+}: {
+  selectedDate: string;
+  setSelectedDate: (date: string) => void;
+  dateOptions: DayOption[];
+  slots: ClassSlot[];
+  members: MemberSummary[];
+  lessonFeedbackTargets: LessonFeedbackTarget[];
+  onOpenLessonSlot: (slotDate: string, hour: number, minute: number, instructor: string, durationMinutes: number) => Promise<void>;
+  onUpdateLessonSlot: (slotId: string, instructor: string, durationMinutes: number, capacity: number) => Promise<void>;
+  onAssignLessonReservation: (slotId: string, memberId: string, durationMinutes: number) => Promise<void>;
+  onCancelLessonReservation: (slotId: string, memberId: string) => Promise<void>;
+  onCancelLessonSlot: (slotId: string) => Promise<void>;
+  onCancelFixedLessonAttendance: (slotId: string, fixedLessonId: string) => Promise<void>;
+  onPublishLessonFeedback: (input: PublishLessonFeedbackInput) => Promise<void>;
+}) {
+  const [readOnly, setReadOnly] = useState(false);
+  const [assigningSlot, setAssigningSlot] = useState<ClassSlot | null>(null);
+  const [editingSlot, setEditingSlot] = useState<ClassSlot | null>(null);
+  const [feedbackTarget, setFeedbackTarget] = useState<LessonFeedbackTarget | null>(null);
+  const [busySlotId, setBusySlotId] = useState<string | null>(null);
+  const daySelectorRef = useRef<ScrollView | null>(null);
+  const daySlots = useMemo(
+    () => slots.filter((slot) => slot.date === selectedDate).sort(sortSlotsByStartsAt),
+    [selectedDate, slots]
+  );
+  const feedbackTargetsByKey = useMemo(
+    () => new Map(lessonFeedbackTargets.map((target) => [getFeedbackTargetKey(target), target])),
+    [lessonFeedbackTargets]
+  );
+  const selectedDateLabel = dateOptions.find((day) => day.id === selectedDate)?.label ?? selectedDate;
+  const instructorNames = useMemo(() => {
+    const names = new Set<string>();
+
+    slots.forEach((slot) => {
+      if (slot.instructor.trim()) {
+        names.add(slot.instructor.trim());
+      }
+    });
+
+    return Array.from(names).sort((a, b) => a.localeCompare(b, 'ko-KR'));
+  }, [slots]);
+  const openCount = daySlots.filter((slot) => slot.isActive).length;
+  const assignedCount = daySlots.reduce((count, slot) => count + slot.fixedMembers.length + slot.substitutes.length, 0);
+
+  useEffect(() => {
+    const selectedIndex = dateOptions.findIndex((day) => day.id === selectedDate);
+
+    if (selectedIndex < 0) {
+      return;
+    }
+
+    daySelectorRef.current?.scrollTo({ x: Math.max(0, selectedIndex * 62 - 20), animated: false });
+  }, [dateOptions, selectedDate]);
+
+  function openFeedback(slot: ClassSlot, person: ReservationPerson) {
+    const existingTarget = person.userId ? feedbackTargetsByKey.get(getFeedbackTargetKeyFor(slot.id, person.userId)) : undefined;
+
+    if (!canWriteLessonFeedbackForPerson(slot, person, existingTarget)) {
+      Alert.alert('피드백 작성', '종료된 수업의 배정 회원에게만 피드백을 작성할 수 있습니다.');
+      return;
+    }
+
+    setFeedbackTarget(createLessonFeedbackTargetFromPerson(slot, person, existingTarget));
+  }
+
+  async function openSlot(slot: ClassSlot) {
+    if (busySlotId) {
+      return;
+    }
+
+    try {
+      setBusySlotId(slot.id);
+      await onOpenLessonSlot(slot.date, slot.hour, slot.minute, slot.instructor, slot.durationMinutes);
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '수업을 열지 못했습니다.';
+      Alert.alert('열기 실패', message);
+    } finally {
+      setBusySlotId(null);
+    }
+  }
+
+  function confirmCloseSlot(slot: ClassSlot) {
+    if (busySlotId) {
+      return;
+    }
+
+    Alert.alert('수업 닫기', `${slot.shortDateLabel} ${formatSlotHour(slot.startsAt)} 수업을 닫을까요? 배정된 추가 수업은 취소됩니다.`, [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '닫기',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            setBusySlotId(slot.id);
+            await onCancelLessonSlot(slot.id);
+          } catch (error) {
+            const message = error instanceof DatabaseError ? error.message : '수업을 닫지 못했습니다.';
+            Alert.alert('닫기 실패', message);
+          } finally {
+            setBusySlotId(null);
+          }
+        }
+      }
+    ]);
+  }
+
+  function confirmCancelReservation(slot: ClassSlot, person: ReservationPerson) {
+    if (busySlotId || !person.userId) {
+      return;
+    }
+
+    Alert.alert('개별 배정 취소', `${person.userName} 회원의 ${formatSlotHour(slot.startsAt)} 배정을 취소할까요?`, [
+      { text: '닫기', style: 'cancel' },
+      {
+        text: '취소',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            setBusySlotId(slot.id);
+            await onCancelLessonReservation(slot.id, person.userId);
+          } catch (error) {
+            const message = error instanceof DatabaseError ? error.message : '배정을 취소하지 못했습니다.';
+            Alert.alert('취소 실패', message);
+          } finally {
+            setBusySlotId(null);
+          }
+        }
+      }
+    ]);
+  }
+
+  function confirmCancelFixedAttendance(slot: ClassSlot, person: ReservationPerson) {
+    if (busySlotId || !person.fixedLessonId) {
+      return;
+    }
+
+    Alert.alert('이 날짜만 제외', `${person.userName} 회원을 ${slot.shortDateLabel} ${formatSlotHour(slot.startsAt)} 수업에서만 제외할까요? 고정수업 자체는 유지됩니다.`, [
+      { text: '닫기', style: 'cancel' },
+      {
+        text: '제외',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            setBusySlotId(slot.id);
+            await onCancelFixedLessonAttendance(slot.id, person.fixedLessonId ?? '');
+          } catch (error) {
+            const message = error instanceof DatabaseError ? error.message : '고정 회원을 제외하지 못했습니다.';
+            Alert.alert('제외 실패', message);
+          } finally {
+            setBusySlotId(null);
+          }
+        }
+      }
+    ]);
+  }
+
+  return (
+    <View style={styles.screenBody}>
+      <ScrollView ref={daySelectorRef} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.daySelector}>
+        {dateOptions.map((day) => {
+          const selected = selectedDate === day.id;
+
+          return (
+            <Pressable key={day.id} style={[styles.dayPill, selected && styles.dayPillActive]} onPress={() => setSelectedDate(day.id)}>
+              <Text style={[styles.dayPillText, selected && styles.dayPillTextActive]}>{day.shortLabel}</Text>
+              {day.caption ? <Text style={[styles.dayPillCaption, selected && styles.dayPillTextActive]}>{day.caption}</Text> : null}
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
+      <View style={styles.adminLessonToolbar}>
+        <View style={styles.feedbackCardTitleBlock}>
+          <Text style={styles.adminOverviewTitle}>{selectedDateLabel}</Text>
+          <Text style={styles.requestMeta}>{openCount}/{daySlots.length}개 열림 · 배정 {assignedCount}명</Text>
+        </View>
+        <Pressable style={styles.memberAdjustButton} onPress={() => setReadOnly((current) => !current)} accessibilityRole="button">
+          <Feather name={readOnly ? 'edit-2' : 'eye'} size={16} color={colors.blue700} />
+          <Text style={styles.memberAdjustButtonText}>{readOnly ? '운영' : '확정표'}</Text>
+        </Pressable>
+      </View>
+
+      {readOnly ? (
+        <AdminFinalScheduleView slots={daySlots} />
+      ) : (
+        <KeyboardAwareScrollView contentContainerStyle={styles.lessonOperationList} showsVerticalScrollIndicator={false}>
+          {daySlots.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Feather name="calendar" size={22} color={colors.blue700} />
+              <Text style={styles.emptyStateText}>이 날짜에는 수업 시간이 없습니다.</Text>
+            </View>
+          ) : null}
+          {daySlots.map((slot) => (
+            <AdminLessonOperationCard
+              key={slot.id}
+              slot={slot}
+              busy={busySlotId === slot.id}
+              onAssign={() => setAssigningSlot(slot)}
+              onEdit={() => setEditingSlot(slot)}
+              onOpen={() => openSlot(slot)}
+              onClose={() => confirmCloseSlot(slot)}
+              onCancelReservation={(person) => confirmCancelReservation(slot, person)}
+              onCancelFixedAttendance={(person) => confirmCancelFixedAttendance(slot, person)}
+              feedbackTargetsByKey={feedbackTargetsByKey}
+              onOpenFeedback={(person) => openFeedback(slot, person)}
+            />
+          ))}
+        </KeyboardAwareScrollView>
+      )}
+
+      <AdminAssignLessonModal
+        visible={Boolean(assigningSlot)}
+        slot={assigningSlot}
+        members={members}
+        onClose={() => setAssigningSlot(null)}
+        onAssign={async (memberId, durationMinutes) => {
+          if (!assigningSlot) {
+            return;
+          }
+
+          try {
+            setBusySlotId(assigningSlot.id);
+            await onAssignLessonReservation(assigningSlot.id, memberId, durationMinutes);
+            setAssigningSlot(null);
+          } catch (error) {
+            const message = error instanceof DatabaseError ? error.message : '회원을 배정하지 못했습니다.';
+            Alert.alert('배정 실패', message);
+          } finally {
+            setBusySlotId(null);
+          }
+        }}
+      />
+
+      <AdminEditLessonModal
+        visible={Boolean(editingSlot)}
+        slot={editingSlot}
+        instructorNames={instructorNames}
+        onClose={() => setEditingSlot(null)}
+        onSave={async (instructor, durationMinutes, capacity) => {
+          if (!editingSlot) {
+            return;
+          }
+
+          try {
+            setBusySlotId(editingSlot.id);
+            await onUpdateLessonSlot(editingSlot.id, instructor, durationMinutes, capacity);
+            setEditingSlot(null);
+          } catch (error) {
+            const message = error instanceof DatabaseError ? error.message : '수업 정보를 변경하지 못했습니다.';
+            Alert.alert('변경 실패', message);
+          } finally {
+            setBusySlotId(null);
+          }
+        }}
+      />
+
+      <AdminLessonFeedbackModal
+        target={feedbackTarget}
+        onClose={() => setFeedbackTarget(null)}
+        onPublishLessonFeedback={onPublishLessonFeedback}
+      />
+    </View>
+  );
+}
+
+function AdminLessonOperationCard({
+  slot,
+  busy,
+  onAssign,
+  onEdit,
+  onOpen,
+  onClose,
+  onCancelReservation,
+  onCancelFixedAttendance,
+  feedbackTargetsByKey,
+  onOpenFeedback
+}: {
+  slot: ClassSlot;
+  busy: boolean;
+  onAssign: () => void;
+  onEdit: () => void;
+  onOpen: () => void;
+  onClose: () => void;
+  onCancelReservation: (person: ReservationPerson) => void;
+  onCancelFixedAttendance: (person: ReservationPerson) => void;
+  feedbackTargetsByKey: ReadonlyMap<string, LessonFeedbackTarget>;
+  onOpenFeedback: (person: ReservationPerson) => void;
+}) {
+  const absentUserIds = new Set(slot.absences.map((person) => person.userId));
+  const activeFixedMembers = slot.fixedMembers.filter((person) => !absentUserIds.has(person.userId));
+  const occupiedCount = activeFixedMembers.length + slot.substitutes.length;
+  const pastSlot = isPastDate(slot.startsAt);
+  const statusLabel = pastSlot ? '종료' : slot.isActive ? '열림' : '닫힘';
+  const statusStyle = pastSlot ? styles.timelineBadgePast : slot.isActive ? styles.statusBadgeSuccess : styles.timelineBadgePast;
+  const renderFeedbackButton = (person: ReservationPerson) => {
+    const target = person.userId ? feedbackTargetsByKey.get(getFeedbackTargetKeyFor(slot.id, person.userId)) : undefined;
+
+    if (!canWriteLessonFeedbackForPerson(slot, person, target)) {
+      return null;
+    }
+
+    return (
+      <Pressable
+        style={styles.personLineButton}
+        onPress={() => onOpenFeedback(person)}
+        accessibilityRole="button"
+        accessibilityLabel={`${person.userName} 피드백 작성`}
+      >
+        <Text style={styles.personLineButtonText}>{target?.feedbackId ? '수정' : '피드백'}</Text>
+      </Pressable>
+    );
+  };
+
+  return (
+    <View style={[styles.lessonOperationCard, !slot.isActive && styles.lessonOperationCardClosed]}>
+      <View style={styles.lessonOperationHeader}>
+        <View style={styles.lessonOperationTime}>
+          <Text style={styles.adminReservationDay}>{slot.shortDateLabel}</Text>
+          <Text style={styles.lessonOperationHour}>{formatSlotHour(slot.startsAt)}</Text>
+        </View>
+        <View style={styles.lessonOperationTitleBlock}>
+          <View style={styles.lessonOperationTitleRow}>
+            <Text style={styles.lessonOperationTitle}>{slot.instructor || '강사 미정'} 강사</Text>
+            <Text style={[styles.timelineBadge, statusStyle]}>{statusLabel}</Text>
+          </View>
+          <Text style={styles.adminReservationMeta}>
+            {formatLessonDuration(slot.durationMinutes)} · 정원 {slot.capacity}명 · 배정 {occupiedCount}명
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.lessonPersonSection}>
+        {slot.fixedMembers.length === 0 && slot.substitutes.length === 0 ? (
+          <Text style={styles.calendarMutedText}>배정된 회원이 없습니다.</Text>
+        ) : null}
+
+        {slot.fixedMembers.map((person) => {
+          const absent = absentUserIds.has(person.userId);
+          const durationLabel = formatLessonDuration(person.durationMinutes ?? slot.durationMinutes);
+
+          return (
+            <View key={`${person.fixedLessonId ?? person.userId}-${person.userName}`} style={styles.lessonPersonLine}>
+              <View style={styles.lessonPersonCopy}>
+                <Text style={[styles.lessonPersonName, absent && styles.lessonPersonNameMuted]}>{person.userName}</Text>
+                <Text style={[styles.lessonPersonMeta, absent && styles.calendarAbsenceText]}>
+                  {absent ? '이 날짜만 제외됨' : `고정수업 · ${durationLabel}`}
+                </Text>
+              </View>
+              <View style={styles.lessonPersonActions}>
+                {!absent ? renderFeedbackButton(person) : null}
+                {!absent && person.fixedLessonId ? (
+                  <Pressable
+                    style={[styles.personLineButton, (busy || pastSlot) && styles.disabledButton]}
+                    onPress={() => onCancelFixedAttendance(person)}
+                    disabled={busy || pastSlot}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.personLineButtonText}>제외</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+          );
+        })}
+
+        {slot.substitutes.map((person) => (
+          <View key={`${person.userId}-${person.createdAt}`} style={styles.lessonPersonLine}>
+            <View style={styles.lessonPersonCopy}>
+              <Text style={styles.lessonPersonName}>{person.userName}</Text>
+              <Text style={[styles.lessonPersonMeta, styles.calendarSubstituteText]}>
+                개별 배정 · {formatLessonDuration(person.durationMinutes ?? slot.durationMinutes)}
+              </Text>
+            </View>
+            <View style={styles.lessonPersonActions}>
+              {renderFeedbackButton(person)}
+              <Pressable
+                style={[styles.personLineButton, styles.personLineButtonDanger, (busy || pastSlot) && styles.disabledButton]}
+                onPress={() => onCancelReservation(person)}
+                disabled={busy || pastSlot}
+                accessibilityRole="button"
+              >
+                <Text style={[styles.personLineButtonText, styles.memberAdjustButtonTextDanger]}>취소</Text>
+              </Pressable>
+            </View>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.lessonOperationActions}>
+        <Pressable
+          style={[styles.memberAdjustButton, (!slot.isActive || busy || pastSlot) && styles.disabledButton]}
+          onPress={onAssign}
+          disabled={!slot.isActive || busy || pastSlot}
+          accessibilityRole="button"
+        >
+          <Feather name="user-plus" size={15} color={colors.blue700} />
+          <Text style={styles.memberAdjustButtonText}>회원배정</Text>
+        </Pressable>
+        <Pressable style={[styles.memberAdjustButton, (busy || pastSlot) && styles.disabledButton]} onPress={onEdit} disabled={busy || pastSlot} accessibilityRole="button">
+          <Feather name="settings" size={15} color={colors.blue700} />
+          <Text style={styles.memberAdjustButtonText}>강사/시간</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.memberAdjustButton, slot.isActive && styles.memberAdjustButtonDanger, (busy || pastSlot) && styles.disabledButton]}
+          onPress={slot.isActive ? onClose : onOpen}
+          disabled={busy || pastSlot}
+          accessibilityRole="button"
+        >
+          <Feather name={slot.isActive ? 'x-circle' : 'check-circle'} size={15} color={slot.isActive ? colors.danger : colors.blue700} />
+          <Text style={[styles.memberAdjustButtonText, slot.isActive && styles.memberAdjustButtonTextDanger]}>
+            {slot.isActive ? '닫기' : '열기'}
+          </Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function AdminAssignLessonModal({
+  visible,
+  slot,
+  members,
+  onClose,
+  onAssign
+}: {
+  visible: boolean;
+  slot: ClassSlot | null;
+  members: MemberSummary[];
+  onClose: () => void;
+  onAssign: (memberId: string, durationMinutes: number) => Promise<void>;
+}) {
+  const [query, setQuery] = useState('');
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
+  const [durationMinutes, setDurationMinutes] = useState(60);
+  const [submitting, setSubmitting] = useState(false);
+  const memberOptions = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+
+    return members
+      .filter((member) => member.role === 'member')
+      .filter((member) => {
+        if (!normalizedQuery) {
+          return true;
+        }
+
+        return (
+          member.name.toLowerCase().includes(normalizedQuery) ||
+          member.email.toLowerCase().includes(normalizedQuery) ||
+          formatPhoneNumber(member.phone).includes(normalizedQuery)
+        );
+      });
+  }, [members, query]);
+  const selectedMember = memberOptions.find((member) => member.id === selectedMemberId) ?? memberOptions[0] ?? null;
+
+  useEffect(() => {
+    if (!visible) {
+      return;
+    }
+
+    setDurationMinutes(60);
+
+    if (!selectedMemberId && memberOptions[0]) {
+      setSelectedMemberId(memberOptions[0].id);
+      return;
+    }
+
+    if (selectedMemberId && !memberOptions.some((member) => member.id === selectedMemberId)) {
+      setSelectedMemberId(memberOptions[0]?.id ?? null);
+    }
+  }, [memberOptions, selectedMemberId, visible]);
+
+  async function submit() {
+    if (!selectedMember || submitting) {
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      await onAssign(selectedMember.id, durationMinutes);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (!slot) {
+    return null;
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={styles.modalCard}>
+          <View style={styles.modalHeader}>
+            <View style={styles.feedbackCardTitleBlock}>
+              <Text style={styles.modalTitle}>회원배정</Text>
+              <Text style={styles.requestMeta}>
+                {slot.shortDateLabel} {formatSlotHour(slot.startsAt)} · {slot.instructor} 강사
+              </Text>
+            </View>
+            <Pressable style={styles.modalCloseButton} onPress={onClose} accessibilityRole="button">
+              <Feather name="x" size={18} color={colors.blue700} />
+            </Pressable>
+          </View>
+
+          <TextInput
+            style={styles.input}
+            value={query}
+            onChangeText={setQuery}
+            placeholder="회원 이름, 이메일, 전화번호 검색"
+            placeholderTextColor={colors.muted}
+            autoCapitalize="none"
+          />
+
+          <ScrollView style={styles.modalMemberList} nestedScrollEnabled showsVerticalScrollIndicator>
+            {memberOptions.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Feather name="search" size={22} color={colors.blue700} />
+                <Text style={styles.emptyStateText}>검색된 회원이 없습니다.</Text>
+              </View>
+            ) : (
+              memberOptions.map((member) => {
+                const selected = selectedMember?.id === member.id;
+
+                return (
+                  <Pressable
+                    key={member.id}
+                    style={[styles.memberPickerRow, selected && styles.memberPickerRowActive]}
+                    onPress={() => setSelectedMemberId(member.id)}
+                    accessibilityRole="button"
+                  >
+                    <Text style={[styles.memberPickerName, selected && styles.memberPickerNameActive]}>{member.name}</Text>
+                    <Text style={[styles.memberPickerMeta, selected && styles.memberPickerMetaActive]}>
+                      잔여 {member.passBalance}회 · {formatLessonCapacity(member.lessonCapacity)}
+                    </Text>
+                  </Pressable>
+                );
+              })
+            )}
+          </ScrollView>
+
+          <View style={styles.selectorBlock}>
+            <Text style={styles.selectorLabel}>수업 길이</Text>
+            <DurationSelector value={durationMinutes} onChange={setDurationMinutes} />
+          </View>
+
+          <View style={styles.modalActions}>
+            <Pressable style={styles.secondaryButton} onPress={onClose} accessibilityRole="button">
+              <Text style={styles.secondaryButtonText}>닫기</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.publishButton, (!selectedMember || submitting) && styles.disabledButton]}
+              onPress={submit}
+              disabled={!selectedMember || submitting}
+              accessibilityRole="button"
+            >
+              <Feather name="check" size={17} color={colors.white} />
+              <Text style={styles.publishButtonText}>배정</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function AdminEditLessonModal({
+  visible,
+  slot,
+  instructorNames,
+  onClose,
+  onSave
+}: {
+  visible: boolean;
+  slot: ClassSlot | null;
+  instructorNames: string[];
+  onClose: () => void;
+  onSave: (instructor: string, durationMinutes: number, capacity: number) => Promise<void>;
+}) {
+  const [instructor, setInstructor] = useState('');
+  const [durationMinutes, setDurationMinutes] = useState(60);
+  const [capacity, setCapacity] = useState(1);
+  const [submitting, setSubmitting] = useState(false);
+  const instructorOptions = useMemo(() => {
+    const names = new Set(instructorNames);
+
+    if (slot?.instructor.trim()) {
+      names.add(slot.instructor.trim());
+    }
+
+    return Array.from(names)
+      .sort((a, b) => a.localeCompare(b, 'ko-KR'))
+      .map((name) => ({ value: name, label: `${name} 강사` }));
+  }, [instructorNames, slot]);
+
+  useEffect(() => {
+    if (!slot || !visible) {
+      return;
+    }
+
+    setInstructor(slot.instructor.trim());
+    setDurationMinutes(slot.durationMinutes);
+    setCapacity(slot.capacity);
+  }, [slot, visible]);
+
+  async function submit() {
+    if (submitting || !slot) {
+      return;
+    }
+
+    const normalizedInstructor = instructor.trim();
+
+    if (!normalizedInstructor) {
+      Alert.alert('강사 선택', '배정할 강사를 선택해주세요.');
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      await onSave(normalizedInstructor, durationMinutes, capacity);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (!slot) {
+    return null;
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={styles.modalCard}>
+          <View style={styles.modalHeader}>
+            <View style={styles.feedbackCardTitleBlock}>
+              <Text style={styles.modalTitle}>강사/시간</Text>
+              <Text style={styles.requestMeta}>
+                {slot.shortDateLabel} {formatSlotHour(slot.startsAt)}
+              </Text>
+            </View>
+            <Pressable style={styles.modalCloseButton} onPress={onClose} accessibilityRole="button">
+              <Feather name="x" size={18} color={colors.blue700} />
+            </Pressable>
+          </View>
+
+          <View style={styles.selectorBlock}>
+            <Text style={styles.selectorLabel}>강사</Text>
+            <DropdownSelect value={instructor} options={instructorOptions} onChange={setInstructor} placeholder="강사 선택" />
+          </View>
+
+          <View style={styles.selectorBlock}>
+            <Text style={styles.selectorLabel}>수업 길이</Text>
+            <DurationSelector value={durationMinutes} onChange={setDurationMinutes} />
+          </View>
+
+          <View style={styles.selectorBlock}>
+            <Text style={styles.selectorLabel}>정원</Text>
+            <View style={styles.lessonDurationSelector}>
+              {[1, 2, 3].map((value) => {
+                const selected = capacity === value;
+
+                return (
+                  <Pressable
+                    key={value}
+                    style={[styles.lessonDurationButton, selected && styles.lessonDurationButtonActive]}
+                    onPress={() => setCapacity(value)}
+                    accessibilityRole="button"
+                  >
+                    <Text style={[styles.lessonDurationButtonText, selected && styles.lessonDurationButtonTextActive]}>{value}명</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+
+          <View style={styles.modalActions}>
+            <Pressable style={styles.secondaryButton} onPress={onClose} accessibilityRole="button">
+              <Text style={styles.secondaryButtonText}>닫기</Text>
+            </Pressable>
+            <Pressable style={[styles.publishButton, submitting && styles.disabledButton]} onPress={submit} disabled={submitting} accessibilityRole="button">
+              <Feather name="save" size={17} color={colors.white} />
+              <Text style={styles.publishButtonText}>저장</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function AdminFinalScheduleView({ slots }: { slots: ClassSlot[] }) {
+  if (slots.length === 0) {
+    return (
+      <View style={styles.emptyState}>
+        <Feather name="calendar" size={22} color={colors.blue700} />
+        <Text style={styles.emptyStateText}>확정된 수업 시간이 없습니다.</Text>
+      </View>
+    );
+  }
+
+  return (
+    <KeyboardAwareScrollView contentContainerStyle={styles.finalScheduleList} showsVerticalScrollIndicator={false}>
+      {slots.map((slot) => {
+        const absentUserIds = new Set(slot.absences.map((person) => person.userId));
+        const fixedMembers = slot.fixedMembers.filter((person) => !absentUserIds.has(person.userId));
+        const extraMembers = slot.isActive ? slot.substitutes : [];
+        const freeSwimmers = slot.isActive ? [] : slot.substitutes;
+        const statusLabel = slot.isActive ? '수업' : freeSwimmers.length > 0 ? '자유수영' : '닫힘';
+        const badgeStyle = slot.isActive ? styles.statusBadgeSuccess : freeSwimmers.length > 0 ? styles.statusBadgePending : styles.timelineBadgePast;
+
+        return (
+          <View key={slot.id} style={styles.finalScheduleRow}>
+            <View style={styles.adminReservationTime}>
+              <Text style={styles.adminReservationDay}>{slot.weekdayLabel}</Text>
+              <Text style={styles.adminReservationHour}>{formatSlotHour(slot.startsAt)}</Text>
+            </View>
+            <View style={styles.adminReservationCopy}>
+              <View style={styles.finalScheduleTitleRow}>
+                <Text style={styles.adminReservationName}>{slot.instructor} 강사</Text>
+                <Text style={[styles.timelineBadge, badgeStyle]}>{statusLabel}</Text>
+              </View>
+              <Text style={styles.adminReservationMeta}>{formatLessonDuration(slot.durationMinutes)} · 정원 {slot.capacity}명</Text>
+              {fixedMembers.length > 0 ? (
+                <Text style={styles.calendarMemberText}>고정 {formatPersonNames(fixedMembers)}</Text>
+              ) : null}
+              {extraMembers.length > 0 ? (
+                <Text style={[styles.calendarMemberText, styles.calendarSubstituteText]}>추가 {formatPersonNames(extraMembers)}</Text>
+              ) : null}
+              {freeSwimmers.length > 0 ? (
+                <Text style={[styles.calendarMemberText, styles.calendarSubstituteText]}>자유수영 {formatPersonNames(freeSwimmers)}</Text>
+              ) : null}
+              {slot.absences.length > 0 ? (
+                <Text style={[styles.calendarMemberText, styles.calendarAbsenceText]}>결석 {formatPersonNames(slot.absences)}</Text>
+              ) : null}
+              {fixedMembers.length === 0 && extraMembers.length === 0 && freeSwimmers.length === 0 && slot.absences.length === 0 ? (
+                <Text style={styles.calendarMutedText}>배정 없음</Text>
+              ) : null}
+            </View>
+          </View>
+        );
+      })}
+    </KeyboardAwareScrollView>
   );
 }
 
@@ -4181,16 +7460,52 @@ function NoticesScreen({
   userRole,
   notices,
   onPublishNotice,
+  onUpdateNotice,
+  onDeleteNotice,
   prefs
 }: {
   userRole: UserRole;
   notices: Notice[];
   onPublishNotice: (title: string, body: string, imageUri?: string) => Promise<void>;
+  onUpdateNotice: (input: UpdateNoticeInput) => Promise<void>;
+  onDeleteNotice: (noticeId: string) => Promise<void>;
   prefs: NotificationPrefs;
 }) {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [imageUri, setImageUri] = useState<string | undefined>();
+  const [imageChanged, setImageChanged] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [editingNotice, setEditingNotice] = useState<Notice | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [deletingNoticeId, setDeletingNoticeId] = useState<string | null>(null);
+
+  function openCreateComposer() {
+    setEditingNotice(null);
+    setTitle('');
+    setBody('');
+    setImageUri(undefined);
+    setImageChanged(false);
+    setComposerOpen(true);
+  }
+
+  function openEditComposer(notice: Notice) {
+    setEditingNotice(notice);
+    setTitle(notice.title);
+    setBody(notice.body);
+    setImageUri(notice.imageUri);
+    setImageChanged(false);
+    setComposerOpen(true);
+  }
+
+  function closeComposer() {
+    setComposerOpen(false);
+    setEditingNotice(null);
+    setTitle('');
+    setBody('');
+    setImageUri(undefined);
+    setImageChanged(false);
+  }
 
   async function pickImage() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -4207,38 +7522,88 @@ function NoticesScreen({
 
     if (!result.canceled) {
       setImageUri(result.assets[0]?.uri);
+      setImageChanged(true);
     }
   }
 
+  function removeImage() {
+    setImageUri(undefined);
+    setImageChanged(true);
+  }
+
   async function submitNotice() {
+    if (submitting) {
+      return;
+    }
+
     if (!title.trim() || !body.trim()) {
       Alert.alert('제목과 내용을 입력해주세요.');
       return;
     }
 
     try {
+      setSubmitting(true);
       const noticeTitle = title.trim();
-      await onPublishNotice(noticeTitle, body.trim(), imageUri);
-      setTitle('');
-      setBody('');
-      setImageUri(undefined);
+      if (editingNotice) {
+        await onUpdateNotice({
+          id: editingNotice.id,
+          title: noticeTitle,
+          body: body.trim(),
+          imageUri,
+          replaceImage: imageChanged
+        });
+      } else {
+        await onPublishNotice(noticeTitle, body.trim(), imageUri);
 
-      if (prefs.notice) {
-        await sendLocalNotification('새 공지사항', noticeTitle);
+        if (prefs.notice) {
+          await sendLocalNotification('새 공지사항', noticeTitle);
+        }
       }
+
+      closeComposer();
     } catch (error) {
-      const message = error instanceof DatabaseError ? error.message : '공지사항을 등록하지 못했습니다.';
-      Alert.alert('등록 실패', message);
+      const message = error instanceof DatabaseError ? error.message : '공지사항을 저장하지 못했습니다.';
+      Alert.alert(editingNotice ? '수정 실패' : '등록 실패', message);
+    } finally {
+      setSubmitting(false);
     }
   }
 
-  return (
-    <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-      {userRole === 'admin' ? (
+  function confirmDeleteNotice(notice: Notice) {
+    if (deletingNoticeId) {
+      return;
+    }
+
+    Alert.alert('공지 삭제', `"${notice.title}" 공지를 삭제할까요? 이 작업은 되돌릴 수 없습니다.`, [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '삭제',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            setDeletingNoticeId(notice.id);
+            await onDeleteNotice(notice.id);
+            if (editingNotice?.id === notice.id) {
+              closeComposer();
+            }
+          } catch (error) {
+            const message = error instanceof DatabaseError ? error.message : '공지사항을 삭제하지 못했습니다.';
+            Alert.alert('삭제 실패', message);
+          } finally {
+            setDeletingNoticeId(null);
+          }
+        }
+      }
+    ]);
+  }
+
+  if (userRole === 'admin' && composerOpen) {
+    return (
+      <KeyboardAwareScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.adminComposer}>
           <View style={styles.composerHeader}>
-            <Feather name="shield" size={18} color={colors.blue700} />
-            <Text style={styles.composerTitle}>관리자 공지 작성</Text>
+            <Feather name="edit-3" size={18} color={colors.blue700} />
+            <Text style={styles.composerTitle}>{editingNotice ? '공지 수정' : '공지 글쓰기'}</Text>
           </View>
           <TextInput
             style={styles.input}
@@ -4257,27 +7622,69 @@ function NoticesScreen({
           />
           {imageUri ? <Image source={{ uri: imageUri }} style={styles.previewImage} /> : null}
           <View style={styles.composerActions}>
+            <Pressable style={styles.secondaryButton} onPress={closeComposer}>
+              <Feather name="list" size={17} color={colors.blue700} />
+              <Text style={styles.secondaryButtonText}>목록</Text>
+            </Pressable>
             <Pressable style={styles.secondaryButton} onPress={pickImage}>
               <Feather name="image" size={17} color={colors.blue700} />
               <Text style={styles.secondaryButtonText}>이미지</Text>
             </Pressable>
-            <Pressable style={styles.publishButton} onPress={submitNotice}>
-              <Feather name="send" size={17} color={colors.white} />
-              <Text style={styles.publishButtonText}>등록</Text>
-            </Pressable>
+            {imageUri ? (
+              <Pressable style={styles.secondaryButton} onPress={removeImage}>
+                <Feather name="x" size={17} color={colors.danger} />
+                <Text style={[styles.secondaryButtonText, styles.memberAdjustButtonTextDanger]}>제거</Text>
+              </Pressable>
+            ) : null}
           </View>
+          <Pressable style={[styles.publishButton, submitting && styles.disabledButton]} onPress={submitNotice} disabled={submitting}>
+            <Feather name={editingNotice ? 'save' : 'send'} size={17} color={colors.white} />
+            <Text style={styles.publishButtonText}>{editingNotice ? '수정 저장' : '등록'}</Text>
+          </Pressable>
         </View>
-      ) : null}
+      </KeyboardAwareScrollView>
+    );
+  }
 
-      <SectionHeader title="공지사항" />
-      {notices.map((notice) => (
-        <NoticeCard key={notice.id} notice={notice} />
-      ))}
-    </ScrollView>
+  return (
+    <KeyboardAwareScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <SectionHeader title="공지사항" actionLabel={userRole === 'admin' ? '글쓰기' : undefined} onAction={userRole === 'admin' ? openCreateComposer : undefined} />
+      {notices.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Feather name="bell" size={22} color={colors.blue700} />
+          <Text style={styles.emptyStateText}>등록된 공지가 없습니다.</Text>
+        </View>
+      ) : (
+        notices.map((notice) => (
+          <NoticeCard
+            key={notice.id}
+            notice={notice}
+            canManage={userRole === 'admin'}
+            deleting={deletingNoticeId === notice.id}
+            onEdit={() => openEditComposer(notice)}
+            onDelete={() => confirmDeleteNotice(notice)}
+          />
+        ))
+      )}
+    </KeyboardAwareScrollView>
   );
 }
 
-function NoticeCard({ notice, compact = false }: { notice: Notice; compact?: boolean }) {
+function NoticeCard({
+  notice,
+  compact = false,
+  canManage = false,
+  deleting = false,
+  onEdit,
+  onDelete
+}: {
+  notice: Notice;
+  compact?: boolean;
+  canManage?: boolean;
+  deleting?: boolean;
+  onEdit?: () => void;
+  onDelete?: () => void;
+}) {
   return (
     <View style={styles.noticeCard}>
       {notice.imageUri ? <Image source={{ uri: notice.imageUri }} style={styles.noticeImage} /> : null}
@@ -4287,6 +7694,22 @@ function NoticeCard({ notice, compact = false }: { notice: Notice; compact?: boo
         <Text style={styles.noticeMeta}>{notice.author}</Text>
         <Text style={styles.noticeMeta}>{formatNoticeDate(notice.createdAt)}</Text>
       </View>
+      {canManage && !compact ? (
+        <View style={styles.noticeManageActions}>
+          <Pressable style={styles.memberAdjustButton} onPress={onEdit} accessibilityRole="button" accessibilityLabel="공지 수정">
+            <Text style={styles.memberAdjustButtonText}>수정</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.memberAdjustButton, styles.memberAdjustButtonDanger, deleting && styles.disabledButton]}
+            onPress={onDelete}
+            disabled={deleting}
+            accessibilityRole="button"
+            accessibilityLabel="공지 삭제"
+          >
+            <Text style={[styles.memberAdjustButtonText, styles.memberAdjustButtonTextDanger]}>{deleting ? '삭제중' : '삭제'}</Text>
+          </Pressable>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -4299,7 +7722,7 @@ function AlertsScreen({
   setPrefs: React.Dispatch<React.SetStateAction<NotificationPrefs>>;
 }) {
   return (
-    <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+    <KeyboardAwareScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
       <View style={styles.alertHero}>
         <Feather name="bell" size={26} color={colors.white} />
         <Text style={styles.alertHeroTitle}>알림</Text>
@@ -4332,7 +7755,7 @@ function AlertsScreen({
         <Feather name="zap" size={18} color={colors.white} />
         <Text style={styles.testNotificationText}>테스트 알림 보내기</Text>
       </Pressable>
-    </ScrollView>
+    </KeyboardAwareScrollView>
   );
 }
 
@@ -4340,55 +7763,145 @@ function ProfileScreen({
   user,
   reservationCount,
   passBalance,
+  memberRequests,
+  onCreateMemberRequest,
   onLogout,
-  onDeleteAccount
+  onDeleteAccount,
+  testAccounts,
+  onSwitchTestAccount
 }: {
   user: User;
   reservationCount: number;
   passBalance: number;
+  memberRequests: MemberRequest[];
+  onCreateMemberRequest: (input: CreateMemberRequestInput) => Promise<void>;
   onLogout: () => void;
   onDeleteAccount: () => void;
+  testAccounts: TestAccount[];
+  onSwitchTestAccount: (account: TestAccount) => Promise<void>;
 }) {
+  const [switchingAccountId, setSwitchingAccountId] = useState<TestAccountId | null>(null);
+  const [detailView, setDetailView] = useState<ProfileDetailView | null>(null);
+  const activeMemberRequestCount = memberRequests.filter((request) => request.status === 'pending' || request.status === 'reviewing').length;
+
+  async function switchTestAccount(account: TestAccount) {
+    if (switchingAccountId || account.email === user.email) {
+      return;
+    }
+
+    try {
+      setSwitchingAccountId(account.id);
+      await onSwitchTestAccount(account);
+    } catch (error) {
+      const message = error instanceof DatabaseError ? error.message : '계정을 전환하지 못했습니다.';
+      Alert.alert('전환 실패', message);
+    } finally {
+      setSwitchingAccountId(null);
+    }
+  }
+
   return (
-    <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+    <KeyboardAwareScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
       <View style={styles.profileCard}>
         <View style={styles.avatar}>
           <Feather name={user.role === 'admin' ? 'shield' : 'user'} size={30} color={colors.white} />
         </View>
         <View style={styles.profileCopy}>
           <Text style={styles.profileName}>{user.name}</Text>
-          <Text style={styles.profileMeta}>
-            {providerMeta[user.provider].label.replace('로 시작', '')} · {user.role === 'admin' ? '관리자' : '회원'}
-          </Text>
         </View>
       </View>
 
-      <View style={styles.infoList}>
-        <InfoRow icon="calendar" label={user.role === 'admin' ? '운영 변동' : '대체 예약'} value={`${reservationCount}개`} />
-        {user.role === 'admin' ? (
-          <InfoRow icon="users" label="예약 관리" value="홈에서 확인" />
-        ) : (
-          <InfoRow icon="credit-card" label="남은 횟수권" value={`${passBalance}회`} />
-        )}
-        <InfoRow icon="phone" label="휴대폰" value={formatPhoneNumber(user.phone)} />
-        <InfoRow icon="phone" label="문의" value={CONTACT_PHONE} onPress={callContact} />
-        <InfoRow icon="smartphone" label="앱 버전" value={Platform.OS === 'ios' ? 'iOS 테스트' : '모바일 테스트'} />
-      </View>
+      {detailView ? (
+        <MemberDetailHeader
+          title={detailView === 'basicInfo' ? '기본 정보' : '문의 접수'}
+          onBack={() => setDetailView(null)}
+        />
+      ) : null}
 
-      <View style={styles.infoList}>
-        <InfoRow
-          icon="shield"
-          label="개인정보 처리방침"
-          value="보기"
-          onPress={() => openExternalUrl(PRIVACY_POLICY_URL, '개인정보 처리방침')}
+      {detailView === 'basicInfo' ? (
+        <View style={styles.infoList}>
+          <InfoRow icon="mail" label="이메일" value={user.email} />
+          <InfoRow icon="user" label="계정" value={`${providerMeta[user.provider].label.replace('로 시작', '')} · ${user.role === 'admin' ? '관리자' : '회원'}`} />
+          <InfoRow icon="phone" label="휴대폰" value={formatPhoneNumber(user.phone)} />
+          <InfoRow icon="calendar" label={user.role === 'admin' ? '운영 변동' : '대체 예약'} value={`${reservationCount}개`} />
+          {user.role === 'admin' ? (
+            <InfoRow icon="users" label="예약 관리" value="홈에서 확인" />
+          ) : (
+            <InfoRow icon="credit-card" label="남은 횟수권" value={`${passBalance}회`} />
+          )}
+          <InfoRow icon="smartphone" label="앱 버전" value={Platform.OS === 'ios' ? 'iOS 테스트' : '모바일 테스트'} />
+        </View>
+      ) : null}
+
+      {detailView === 'memberRequests' ? (
+        <MemberRequestOverview
+          requests={memberRequests}
+          onCreateMemberRequest={onCreateMemberRequest}
+          showList
+          showComposer
         />
-        <InfoRow
-          icon="trash-2"
-          label="계정 삭제 안내"
-          value="보기"
-          onPress={() => openExternalUrl(ACCOUNT_DELETION_URL, '계정 삭제 안내')}
-        />
-      </View>
+      ) : null}
+
+      {!detailView ? (
+        <>
+          <View style={styles.infoList}>
+            <InfoRow icon="user" label="기본 정보" value="보기" onPress={() => setDetailView('basicInfo')} />
+            {user.role === 'member' ? (
+              <InfoRow
+                icon="message-square"
+                label="문의 접수"
+                value={activeMemberRequestCount > 0 ? `${activeMemberRequestCount}건 처리중` : '작성'}
+                onPress={() => setDetailView('memberRequests')}
+              />
+            ) : null}
+            <InfoRow icon="phone-call" label="전화 문의" value={CONTACT_PHONE} onPress={callContact} />
+          </View>
+
+          <View style={styles.infoList}>
+            <InfoRow
+              icon="shield"
+              label="개인정보 처리방침"
+              value="보기"
+              onPress={() => openExternalUrl(PRIVACY_POLICY_URL, '개인정보 처리방침')}
+            />
+            <InfoRow
+              icon="trash-2"
+              label="계정 삭제 안내"
+              value="보기"
+              onPress={() => openExternalUrl(ACCOUNT_DELETION_URL, '계정 삭제 안내')}
+            />
+          </View>
+        </>
+      ) : null}
+
+      {testAccounts.length > 0 ? (
+        <View style={styles.devSwitchCard}>
+          <View style={styles.devSwitchHeader}>
+            <Feather name="repeat" size={18} color={colors.blue700} />
+            <Text style={styles.devSwitchTitle}>테스트 계정 전환</Text>
+          </View>
+          <View style={styles.devAccountButtons}>
+            {testAccounts.map((account) => {
+              const current = account.email === user.email;
+              const switching = switchingAccountId === account.id;
+
+              return (
+                <Pressable
+                  key={account.id}
+                  style={[styles.devAccountButton, current && styles.devAccountButtonActive, (current || Boolean(switchingAccountId)) && styles.disabledButton]}
+                  onPress={() => switchTestAccount(account)}
+                  disabled={current || Boolean(switchingAccountId)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${account.label} 테스트 계정으로 전환`}
+                >
+                  {switching ? <ActivityIndicator color={colors.blue700} /> : <Feather name={account.icon} size={16} color={colors.blue700} />}
+                  <Text style={styles.devAccountButtonText}>{current ? `${account.label} 접속중` : account.label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      ) : null}
 
       <Pressable style={styles.logoutButton} onPress={onLogout}>
         <Feather name="log-out" size={18} color={colors.danger} />
@@ -4399,7 +7912,7 @@ function ProfileScreen({
         <Feather name="trash-2" size={18} color={colors.danger} />
         <Text style={styles.deleteAccountText}>계정 삭제</Text>
       </Pressable>
-    </ScrollView>
+    </KeyboardAwareScrollView>
   );
 }
 
@@ -4458,17 +7971,20 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.surface
   },
+  keyboardAvoidingView: {
+    flex: 1
+  },
   header: {
-    backgroundColor: colors.blue900,
-    paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 18,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
+    backgroundColor: colors.blue800,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 16
+    gap: spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.navyLine
   },
   headerBrand: {
     flex: 1,
@@ -4478,8 +7994,8 @@ const styles = StyleSheet.create({
     gap: 12
   },
   headerLogoImage: {
-    width: 74,
-    height: 56
+    width: 58,
+    height: 42
   },
   headerTextBlock: {
     flex: 1,
@@ -4494,24 +8010,26 @@ const styles = StyleSheet.create({
   headerTitle: {
     ...type.extraBold,
     color: colors.white,
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: '800',
     maxWidth: 210
   },
   contactButton: {
-    minWidth: 56,
-    height: 48,
-    borderRadius: 8,
-    backgroundColor: colors.white,
+    minWidth: 92,
+    height: 38,
+    borderRadius: radius.md,
+    backgroundColor: colors.navyGlass,
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
     borderWidth: 1,
-    borderColor: colors.blue200,
-    paddingHorizontal: 10
+    borderColor: colors.navyLineStrong,
+    paddingHorizontal: 12
   },
   contactButtonText: {
     ...type.extraBold,
-    color: colors.blue700,
+    color: colors.white,
     fontSize: 14,
     fontWeight: '900'
   },
@@ -4519,13 +8037,14 @@ const styles = StyleSheet.create({
     flex: 1
   },
   scrollContent: {
-    padding: 20,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
     paddingBottom: 104,
-    gap: 14
+    gap: spacing.md
   },
   loginSafeArea: {
     flex: 1,
-    backgroundColor: colors.blue900
+    backgroundColor: colors.blue800
   },
   loginScrollContent: {
     flexGrow: 1
@@ -4564,13 +8083,13 @@ const styles = StyleSheet.create({
   loginPanel: {
     backgroundColor: colors.white,
     padding: 22,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
+    borderTopLeftRadius: radius.md,
+    borderTopRightRadius: radius.md,
     gap: 12
   },
   roleSwitch: {
     flexDirection: 'row',
-    backgroundColor: colors.surface,
+    backgroundColor: colors.blue50,
     borderRadius: 8,
     padding: 4,
     marginBottom: 4
@@ -4585,7 +8104,7 @@ const styles = StyleSheet.create({
     gap: 6
   },
   roleButtonActive: {
-    backgroundColor: colors.blue900
+    backgroundColor: colors.blue700
   },
   roleButtonText: {
     ...type.bold,
@@ -4594,6 +8113,47 @@ const styles = StyleSheet.create({
   },
   roleButtonTextActive: {
     color: colors.white
+  },
+  devLoginPanel: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.blue200,
+    backgroundColor: colors.blue50,
+    padding: 10,
+    gap: 8
+  },
+  devLoginTitle: {
+    ...type.extraBold,
+    color: colors.blue700,
+    fontSize: 13,
+    fontWeight: '900'
+  },
+  devAccountButtons: {
+    flexDirection: 'row',
+    gap: 8
+  },
+  devAccountButton: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: 8,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.blue200,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 10
+  },
+  devAccountButtonActive: {
+    backgroundColor: colors.aqua100,
+    borderColor: colors.blue700
+  },
+  devAccountButtonText: {
+    ...type.extraBold,
+    color: colors.blue700,
+    fontSize: 13,
+    fontWeight: '900'
   },
   ssoButton: {
     minHeight: 54,
@@ -4614,7 +8174,7 @@ const styles = StyleSheet.create({
   authSubmitButton: {
     minHeight: 54,
     borderRadius: 8,
-    backgroundColor: colors.blue900,
+    backgroundColor: colors.blue700,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
@@ -4643,31 +8203,30 @@ const styles = StyleSheet.create({
     fontWeight: '800'
   },
   heroCard: {
-    backgroundColor: colors.blue900,
-    borderRadius: 8,
-    padding: 22,
-    gap: 18,
+    backgroundColor: colors.white,
+    borderRadius: radius.md,
+    padding: spacing.xl,
+    gap: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.blue200,
     ...shadows.soft
   },
   focusCard: {
-    backgroundColor: colors.blue900,
-    borderRadius: 8,
-    padding: 22,
-    gap: 18,
+    backgroundColor: colors.white,
+    borderRadius: radius.md,
+    padding: spacing.xl,
+    gap: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.blue200,
+    borderTopWidth: 3,
+    borderTopColor: colors.aqua500,
     ...shadows.soft
   },
   heroTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between'
-  },
-  heroIconBadge: {
-    width: 48,
-    height: 48,
-    borderRadius: 8,
-    backgroundColor: colors.aqua100,
-    alignItems: 'center',
-    justifyContent: 'center'
+    justifyContent: 'space-between',
+    gap: 12
   },
   heroDots: {
     flexDirection: 'row',
@@ -4677,7 +8236,7 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: 'rgba(255,255,255,0.32)'
+    backgroundColor: colors.navyDot
   },
   heroDotActive: {
     width: 22,
@@ -4687,38 +8246,138 @@ const styles = StyleSheet.create({
   },
   heroTitle: {
     ...type.extraBold,
-    color: colors.white,
-    fontSize: 30,
+    color: colors.blue900,
+    fontSize: 28,
     fontWeight: '900',
     marginTop: 2
   },
   heroBody: {
     ...type.bold,
-    color: colors.aqua100,
-    fontSize: 16,
+    color: colors.inkSoft,
+    fontSize: 14,
+    lineHeight: 20,
     fontWeight: '800',
-    marginTop: 8
+    marginTop: 6
   },
   focusBadge: {
     ...type.extraBold,
-    color: colors.aqua100,
+    color: colors.blue800,
+    backgroundColor: colors.aqua100,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.blue200,
+    overflow: 'hidden',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    fontSize: 12,
+    fontWeight: '900',
+    flexShrink: 0,
+    textAlign: 'right'
+  },
+  focusEyebrow: {
+    ...type.extraBold,
+    color: colors.blue700,
     fontSize: 15,
-    fontWeight: '900'
+    fontWeight: '900',
+    flex: 1,
+    minWidth: 0
   },
   primaryButton: {
-    height: 48,
-    borderRadius: 8,
-    backgroundColor: colors.white,
+    height: 46,
+    borderRadius: radius.md,
+    backgroundColor: colors.blue700,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
-    gap: 8
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.blue700
   },
   primaryButtonText: {
     ...type.extraBold,
-    color: colors.blue700,
-    fontSize: 16,
+    color: colors.white,
+    fontSize: typography.button.fontSize,
+    lineHeight: typography.button.lineHeight,
     fontWeight: '900'
+  },
+  memberHeroActions: {
+    gap: 8
+  },
+  memberFixedScheduleLine: {
+    minHeight: 32,
+    borderRadius: radius.md,
+    backgroundColor: colors.blue50,
+    borderWidth: 1,
+    borderColor: colors.blue200,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 11
+  },
+  memberFixedScheduleText: {
+    ...type.bold,
+    color: colors.blue800,
+    fontSize: 13,
+    fontWeight: '800',
+    flex: 1,
+    minWidth: 0
+  },
+  memberPendingLine: {
+    minHeight: 32,
+    borderRadius: radius.md,
+    backgroundColor: colors.warningBg,
+    borderWidth: 1,
+    borderColor: colors.warningLine,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 11
+  },
+  memberPendingText: {
+    ...type.extraBold,
+    color: colors.warningText,
+    fontSize: 13,
+    fontWeight: '900',
+    flex: 1,
+    minWidth: 0
+  },
+  memberDetailHeader: {
+    minHeight: 48,
+    borderRadius: radius.md,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.line,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: spacing.sm,
+    ...shadows.card
+  },
+  memberDetailBackButton: {
+    minHeight: 36,
+    borderRadius: radius.md,
+    backgroundColor: colors.blue50,
+    borderWidth: 1,
+    borderColor: colors.blue200,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    paddingHorizontal: 9
+  },
+  memberDetailBackText: {
+    ...type.extraBold,
+    color: colors.blue700,
+    fontSize: 13,
+    fontWeight: '900'
+  },
+  memberDetailTitle: {
+    ...type.extraBold,
+    color: colors.ink,
+    fontSize: 17,
+    fontWeight: '900',
+    flex: 1,
+    minWidth: 0
   },
   metricsGrid: {
     flexDirection: 'row',
@@ -4727,8 +8386,8 @@ const styles = StyleSheet.create({
   metricCard: {
     flex: 1,
     backgroundColor: colors.card,
-    borderRadius: 8,
-    padding: 14,
+    borderRadius: radius.md,
+    padding: spacing.md,
     borderWidth: 1,
     borderColor: colors.line,
     ...shadows.card
@@ -4749,12 +8408,12 @@ const styles = StyleSheet.create({
   },
   summaryStrip: {
     flexDirection: 'row',
-    gap: 8
+    gap: spacing.sm
   },
   summaryItem: {
     flex: 1,
-    minHeight: 70,
-    borderRadius: 8,
+    minHeight: 64,
+    borderRadius: radius.md,
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.line,
@@ -4766,7 +8425,7 @@ const styles = StyleSheet.create({
   summaryValue: {
     ...type.extraBold,
     color: colors.ink,
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '900'
   },
   summaryLabel: {
@@ -4775,6 +8434,140 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     marginTop: 4
+  },
+  homeSectionMenu: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm
+  },
+  homeSectionMenuButton: {
+    flexBasis: '48%',
+    flexGrow: 1,
+    minHeight: 96,
+    borderRadius: radius.md,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: 'stretch',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    ...shadows.card
+  },
+  homeSectionMenuButtonActive: {
+    backgroundColor: colors.aqua100,
+    borderColor: colors.blue700
+  },
+  homeSectionMenuTopRow: {
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.sm
+  },
+  homeSectionMenuIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.md,
+    backgroundColor: colors.aqua100,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  homeSectionMenuIconActive: {
+    backgroundColor: colors.blue700
+  },
+  homeSectionMenuCopy: {
+    flex: 0,
+    minWidth: 0,
+    gap: 3,
+    justifyContent: 'flex-end'
+  },
+  homeSectionMenuTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5
+  },
+  homeSectionMenuText: {
+    ...type.extraBold,
+    color: colors.ink,
+    fontSize: 15,
+    fontWeight: '900',
+    flexShrink: 1,
+    minWidth: 0
+  },
+  homeSectionMenuTextActive: {
+    color: colors.blue900
+  },
+  homeSectionMenuDescription: {
+    ...type.bold,
+    color: colors.muted,
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  homeSectionMenuDescriptionActive: {
+    color: colors.blue800
+  },
+  infoTooltipWrap: {
+    alignSelf: 'flex-start'
+  },
+  infoIconButton: {
+    width: 22,
+    height: 22,
+    borderRadius: radius.md,
+    backgroundColor: colors.blue50,
+    borderWidth: 1,
+    borderColor: colors.blue200,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  tooltipOverlay: {
+    ...StyleSheet.absoluteFillObject
+  },
+  tooltipBubble: {
+    position: 'absolute',
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.blue200,
+    borderRadius: radius.md,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    ...shadows.floating
+  },
+  tooltipCaret: {
+    position: 'absolute',
+    top: -5,
+    width: 10,
+    height: 10,
+    backgroundColor: colors.white,
+    borderLeftWidth: 1,
+    borderTopWidth: 1,
+    borderColor: colors.blue200,
+    transform: [{ rotate: '45deg' }]
+  },
+  tooltipText: {
+    ...type.bold,
+    color: colors.blue800,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '800'
+  },
+  homeSectionMenuCount: {
+    ...type.extraBold,
+    minWidth: 28,
+    borderRadius: radius.md,
+    overflow: 'hidden',
+    backgroundColor: colors.blue50,
+    color: colors.blue800,
+    fontSize: 13,
+    fontWeight: '900',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    textAlign: 'center'
+  },
+  homeSectionMenuCountActive: {
+    backgroundColor: colors.blue700,
+    color: colors.white
   },
   sectionHeader: {
     marginTop: 6,
@@ -4785,7 +8578,8 @@ const styles = StyleSheet.create({
   sectionTitle: {
     ...type.extraBold,
     color: colors.ink,
-    fontSize: 20,
+    fontSize: typography.screenTitle.fontSize,
+    lineHeight: typography.screenTitle.lineHeight,
     fontWeight: '900'
   },
   sectionAction: {
@@ -4803,23 +8597,26 @@ const styles = StyleSheet.create({
     flex: 1
   },
   daySelector: {
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    gap: 8
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xl,
+    gap: spacing.sm,
+    minHeight: 90
   },
   dayPill: {
     width: 54,
     height: 54,
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.line,
     alignItems: 'center',
-    justifyContent: 'center'
+    justifyContent: 'center',
+    ...shadows.card
   },
   dayPillActive: {
-    backgroundColor: colors.blue900,
-    borderColor: colors.blue900
+    backgroundColor: colors.aqua100,
+    borderColor: colors.blue700
   },
   dayPillText: {
     ...type.extraBold,
@@ -4835,26 +8632,27 @@ const styles = StyleSheet.create({
     marginTop: 3
   },
   dayPillTextActive: {
-    color: colors.white
+    color: colors.blue900
   },
   slotList: {
-    paddingHorizontal: 20,
-    paddingTop: 8,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.sm,
     paddingBottom: 104,
     gap: 10
   },
   passSummary: {
-    marginHorizontal: 20,
-    marginBottom: 12,
-    borderRadius: 8,
+    marginHorizontal: spacing.xl,
+    marginTop: 6,
+    marginBottom: spacing.md,
+    borderRadius: radius.md,
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.line,
-    padding: 16,
+    padding: spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
+    gap: spacing.md,
     ...shadows.card
   },
   passSummaryStat: {
@@ -4865,29 +8663,321 @@ const styles = StyleSheet.create({
   passSummaryValue: {
     ...type.extraBold,
     color: colors.blue700,
-    fontSize: 25,
+    fontSize: 22,
     fontWeight: '900'
   },
-  passSummaryBadge: {
-    minHeight: 34,
-    borderRadius: 8,
-    backgroundColor: colors.aqua100,
-    alignItems: 'center',
-    justifyContent: 'center',
+  passSummaryLabel: {
+    ...type.bold,
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: '800',
+    marginBottom: 2
+  },
+  changePickerCard: {
+    marginHorizontal: spacing.xl,
+    marginBottom: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.blue200,
+    borderTopWidth: 3,
+    borderTopColor: colors.aqua500,
+    padding: spacing.md,
+    gap: 10,
+    ...shadows.card
+  },
+  changePickerHeader: {
     flexDirection: 'row',
-    gap: 6,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10
+  },
+  changePickerTitleBlock: {
+    flex: 1,
+    minWidth: 0
+  },
+  changePickerTitle: {
+    ...type.extraBold,
+    color: colors.ink,
+    fontSize: 16,
+    fontWeight: '900'
+  },
+  changePickerMeta: {
+    ...type.bold,
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: '800',
+    marginTop: 3
+  },
+  changePickerCloseButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 8,
+    backgroundColor: colors.blue50,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  changeTargetRow: {
+    minHeight: 62,
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10
+  },
+  weekSelector: {
+    gap: 8,
+    paddingRight: 2
+  },
+  weekSelectorButton: {
+    minWidth: 104,
+    minHeight: 52,
+    borderRadius: 8,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+    justifyContent: 'center',
     paddingHorizontal: 12
   },
-  passSummaryBadgeText: {
+  weekSelectorButtonActive: {
+    borderColor: colors.blue700,
+    backgroundColor: colors.blue50
+  },
+  weekSelectorText: {
+    ...type.extraBold,
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: '900'
+  },
+  weekSelectorTextActive: {
+    color: colors.blue900
+  },
+  weekSelectorMeta: {
+    ...type.bold,
+    color: colors.muted,
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 2
+  },
+  weekSelectorMetaActive: {
+    color: colors.blue700
+  },
+  weekLessonList: {
+    gap: 12
+  },
+  weekDaySection: {
+    gap: 8
+  },
+  weekDayHeader: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10
+  },
+  weekDayTitle: {
+    ...type.extraBold,
+    color: colors.ink,
+    fontSize: 16,
+    fontWeight: '900'
+  },
+  weekDayMeta: {
+    ...type.bold,
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: '800'
+  },
+  weekLessonRow: {
+    borderRadius: 8,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.success,
+    padding: 12,
+    gap: 10
+  },
+  weekLessonRowClosed: {
+    borderLeftColor: colors.muted,
+    backgroundColor: colors.blue50
+  },
+  weekLessonTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10
+  },
+  weekLessonPeople: {
+    gap: 4
+  },
+  weekSubstituteRow: {
+    minHeight: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6
+  },
+  weekLessonActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8
+  },
+  adminLessonToolbar: {
+    minHeight: 62,
+    marginHorizontal: 20,
+    marginBottom: 12,
+    borderRadius: 8,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 10
+  },
+  finalScheduleList: {
+    gap: 8,
+    paddingHorizontal: 20,
+    paddingBottom: 20
+  },
+  finalScheduleRow: {
+    minHeight: 86,
+    borderRadius: 8,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12
+  },
+  finalScheduleTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8
+  },
+  lessonOperationList: {
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingBottom: 22
+  },
+  lessonOperationCard: {
+    borderRadius: 8,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: 12,
+    gap: 12
+  },
+  lessonOperationCardClosed: {
+    backgroundColor: colors.surface,
+    borderColor: colors.lineStrong
+  },
+  lessonOperationHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12
+  },
+  lessonOperationTime: {
+    width: 72
+  },
+  lessonOperationHour: {
+    ...type.extraBold,
+    color: colors.ink,
+    fontSize: 20,
+    fontWeight: '900',
+    marginTop: 2
+  },
+  lessonOperationTitleBlock: {
+    flex: 1,
+    minWidth: 0
+  },
+  lessonOperationTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8
+  },
+  lessonOperationTitle: {
+    ...type.extraBold,
+    color: colors.ink,
+    flex: 1,
+    minWidth: 0,
+    fontSize: 16,
+    fontWeight: '900'
+  },
+  lessonPersonSection: {
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+    paddingTop: 8,
+    gap: 4
+  },
+  lessonPersonLine: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  lessonPersonCopy: {
+    flex: 1,
+    minWidth: 0
+  },
+  lessonPersonActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    gap: 6
+  },
+  lessonPersonName: {
+    ...type.extraBold,
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: '900'
+  },
+  lessonPersonNameMuted: {
+    color: colors.muted
+  },
+  lessonPersonMeta: {
+    ...type.bold,
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 2
+  },
+  personLineButton: {
+    minWidth: 48,
+    height: 32,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.blue200,
+    backgroundColor: colors.blue50,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8
+  },
+  personLineButtonDanger: {
+    borderColor: colors.dangerLine,
+    backgroundColor: colors.white
+  },
+  personLineButtonText: {
     ...type.extraBold,
     color: colors.blue700,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '900'
+  },
+  lessonOperationActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8
   },
   slotCard: {
     backgroundColor: colors.card,
-    borderRadius: 8,
-    padding: 15,
+    borderRadius: radius.md,
+    padding: 13,
     borderWidth: 1,
     borderColor: colors.line,
     flexDirection: 'row',
@@ -4896,8 +8986,8 @@ const styles = StyleSheet.create({
     ...shadows.card
   },
   slotCardReserved: {
-    borderColor: colors.blue700,
-    backgroundColor: colors.blue50
+    borderColor: colors.blue200,
+    backgroundColor: colors.aqua100
   },
   slotTimeBlock: {
     width: 64,
@@ -4947,9 +9037,9 @@ const styles = StyleSheet.create({
   },
   reserveButton: {
     width: 78,
-    height: 44,
-    borderRadius: 8,
-    backgroundColor: colors.blue900,
+    height: 40,
+    borderRadius: radius.md,
+    backgroundColor: colors.blue700,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 6
@@ -4960,16 +9050,29 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '900'
   },
+  slotActionGroup: {
+    width: 74,
+    gap: 6
+  },
+  compactReserveButton: {
+    width: 74,
+    height: 34
+  },
+  compactReserveButtonText: {
+    fontSize: 12
+  },
   cancelButton: {
     backgroundColor: colors.white,
     borderWidth: 1,
-    borderColor: colors.danger
+    borderColor: colors.dangerLine
   },
   cancelButtonText: {
     color: colors.danger
   },
   waitButton: {
-    backgroundColor: colors.aqua100
+    backgroundColor: colors.blue50,
+    borderWidth: 1,
+    borderColor: colors.blue200
   },
   waitButtonText: {
     ...type.bold,
@@ -4977,28 +9080,94 @@ const styles = StyleSheet.create({
     fontSize: 13
   },
   secondaryActionButton: {
-    minHeight: 44,
-    borderRadius: 8,
+    minHeight: 42,
+    borderRadius: radius.md,
     backgroundColor: colors.blue50,
     borderWidth: 1,
     borderColor: colors.blue200,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
-    gap: 8
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md
   },
   secondaryActionText: {
     ...type.extraBold,
-    color: colors.blue700,
-    fontSize: 14,
+    color: colors.blue800,
+    fontSize: typography.button.fontSize,
+    lineHeight: typography.button.lineHeight,
     fontWeight: '900'
   },
   requestCard: {
-    borderRadius: 8,
-    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.line,
-    padding: 12,
+    padding: spacing.md,
+    gap: spacing.sm,
+    ...shadows.card
+  },
+  timelineCardUpcoming: {
+    backgroundColor: colors.white,
+    borderColor: colors.blue200,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.aqua500
+  },
+  timelineCardPast: {
+    backgroundColor: colors.blue50,
+    borderColor: colors.line,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.muted
+  },
+  timelineCardPending: {
+    backgroundColor: colors.white,
+    borderColor: colors.warningLine,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.warning
+  },
+  timelineBadge: {
+    ...type.extraBold,
+    flexShrink: 0,
+    overflow: 'hidden',
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    fontSize: typography.caption.fontSize - 1,
+    fontWeight: '900'
+  },
+  timelineBadgeUpcoming: {
+    color: colors.blue800,
+    backgroundColor: colors.aqua100,
+    borderColor: colors.blue200
+  },
+  timelineBadgePast: {
+    color: colors.muted,
+    backgroundColor: colors.surfaceAlt,
+    borderColor: colors.line
+  },
+  statusBadgePending: {
+    color: colors.warningText,
+    backgroundColor: colors.warningBg,
+    borderColor: colors.warningLine
+  },
+  statusBadgeSuccess: {
+    color: colors.successText,
+    backgroundColor: colors.successBg,
+    borderColor: colors.successLine
+  },
+  statusBadgeDanger: {
+    color: colors.dangerText,
+    backgroundColor: colors.dangerBg,
+    borderColor: colors.dangerLine
+  },
+  requestCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10
+  },
+  requestListSpacing: {
     gap: 8
   },
   requestTitle: {
@@ -5023,11 +9192,180 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8
   },
+  compactSelector: {
+    gap: 8,
+    paddingRight: 2
+  },
+  selectorBlock: {
+    gap: 8
+  },
+  selectorLabel: {
+    ...type.extraBold,
+    color: colors.ink,
+    fontSize: 13,
+    fontWeight: '900'
+  },
+  selectorChip: {
+    minWidth: 46,
+    minHeight: 38,
+    borderRadius: radius.md,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12
+  },
+  timeSelectorChip: {
+    minWidth: 70,
+    minHeight: 38,
+    borderRadius: radius.md,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12
+  },
+  selectorChipActive: {
+    backgroundColor: colors.blue700,
+    borderColor: colors.blue700
+  },
+  selectorChipText: {
+    ...type.extraBold,
+    color: colors.ink,
+    fontSize: 13,
+    fontWeight: '900'
+  },
+  selectorChipTextActive: {
+    color: colors.white
+  },
+  dropdownWrap: {
+    gap: 6
+  },
+  dropdownButton: {
+    minHeight: 46,
+    borderRadius: radius.md,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8
+  },
+  dropdownButtonText: {
+    ...type.extraBold,
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: '900'
+  },
+  dropdownPlaceholder: {
+    ...type.bold,
+    color: colors.muted,
+    fontSize: 14,
+    fontWeight: '700'
+  },
+  dropdownMenu: {
+    maxHeight: 220,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.white,
+    overflow: 'hidden'
+  },
+  dropdownMenuScroll: {
+    maxHeight: 220
+  },
+  dropdownOption: {
+    minHeight: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    justifyContent: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.line
+  },
+  dropdownOptionActive: {
+    backgroundColor: colors.blue700
+  },
+  dropdownOptionText: {
+    ...type.extraBold,
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: '900'
+  },
+  dropdownOptionTextActive: {
+    color: colors.white
+  },
+  dropdownOptionMeta: {
+    ...type.bold,
+    color: colors.muted,
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 2
+  },
+  dropdownOptionMetaActive: {
+    color: colors.aqua100
+  },
+  multiTimeGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8
+  },
+  multiTimeButton: {
+    width: '22.5%',
+    minWidth: 68,
+    minHeight: 36,
+    borderRadius: radius.md,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6
+  },
+  memberLessonGroup: {
+    gap: 8
+  },
+  memberPastLessonItem: {
+    gap: 8
+  },
+  memberPastLessonMeta: {
+    flexShrink: 1,
+    minWidth: 0
+  },
+  memberLessonGroupTitle: {
+    ...type.extraBold,
+    color: colors.blue700,
+    fontSize: 13,
+    fontWeight: '900'
+  },
+  memberFeedbackButton: {
+    minWidth: 86,
+    minHeight: 36,
+    borderRadius: radius.md,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.blue200,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8
+  },
+  memberFeedbackButtonText: {
+    ...type.extraBold,
+    color: colors.blue700,
+    fontSize: 12,
+    fontWeight: '900'
+  },
+  memberFeedbackButtonTextDisabled: {
+    color: colors.muted
+  },
   requestApproveButton: {
     flex: 1,
     minHeight: 42,
-    borderRadius: 8,
-    backgroundColor: colors.blue900,
+    borderRadius: radius.md,
+    backgroundColor: colors.blue700,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
@@ -5042,10 +9380,22 @@ const styles = StyleSheet.create({
   requestRejectButton: {
     flex: 1,
     minHeight: 42,
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
-    borderColor: '#F3C5C5',
+    borderColor: colors.dangerLine,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6
+  },
+  requestNeutralButton: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: radius.md,
+    backgroundColor: colors.blue50,
+    borderWidth: 1,
+    borderColor: colors.blue200,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
@@ -5058,12 +9408,16 @@ const styles = StyleSheet.create({
     fontWeight: '900'
   },
   feedbackCard: {
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.line,
     padding: 12,
     gap: 10
+  },
+  memberInlineFeedbackCard: {
+    marginLeft: 10,
+    backgroundColor: colors.white
   },
   feedbackCardHeader: {
     flexDirection: 'row',
@@ -5084,29 +9438,25 @@ const styles = StyleSheet.create({
   feedbackImage: {
     width: '100%',
     height: 188,
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.blue50
   },
   feedbackImageCompact: {
     height: 132
   },
-  feedbackVideoButton: {
-    minHeight: 76,
-    borderRadius: 8,
+  feedbackVideoFrame: {
+    width: '100%',
+    height: 188,
+    borderRadius: radius.md,
     backgroundColor: colors.blue900,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 8
+    overflow: 'hidden'
   },
-  feedbackVideoButtonCompact: {
-    minHeight: 52
+  feedbackVideoFrameCompact: {
+    height: 132
   },
-  feedbackVideoText: {
-    ...type.extraBold,
-    color: colors.white,
-    fontSize: 14,
-    fontWeight: '900'
+  feedbackVideo: {
+    width: '100%',
+    height: '100%'
   },
   feedbackTargetList: {
     gap: 8,
@@ -5115,7 +9465,7 @@ const styles = StyleSheet.create({
   feedbackTargetChip: {
     width: 132,
     minHeight: 78,
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.line,
@@ -5123,8 +9473,8 @@ const styles = StyleSheet.create({
     gap: 4
   },
   feedbackTargetChipActive: {
-    backgroundColor: colors.blue900,
-    borderColor: colors.blue900
+    backgroundColor: colors.blue700,
+    borderColor: colors.blue700
   },
   feedbackTargetName: {
     ...type.extraBold,
@@ -5151,7 +9501,7 @@ const styles = StyleSheet.create({
     fontWeight: '900'
   },
   feedbackComposer: {
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.blue50,
     borderWidth: 1,
     borderColor: colors.blue200,
@@ -5165,6 +9515,39 @@ const styles = StyleSheet.create({
     minHeight: 76,
     textAlignVertical: 'top',
     paddingTop: 12
+  },
+  reviewCommentInput: {
+    minHeight: 70,
+    textAlignVertical: 'top',
+    paddingTop: 12,
+    backgroundColor: colors.white
+  },
+  storeQuantityInput: {
+    width: 86,
+    textAlign: 'center'
+  },
+  storeNumberInput: {
+    flex: 1,
+    minWidth: 0,
+    textAlign: 'center'
+  },
+  storeProductImage: {
+    width: '100%',
+    height: 160,
+    borderRadius: radius.md,
+    backgroundColor: colors.blue50
+  },
+  storeProductImagePreview: {
+    width: '100%',
+    height: 150,
+    borderRadius: radius.md,
+    backgroundColor: colors.white
+  },
+  storeProductThumb: {
+    width: 54,
+    height: 54,
+    borderRadius: radius.md,
+    backgroundColor: colors.blue50
   },
   feedbackCounter: {
     ...type.bold,
@@ -5181,37 +9564,65 @@ const styles = StyleSheet.create({
   specialLessonPoster: {
     width: '100%',
     height: 210,
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.blue50
   },
   specialLessonPosterPreview: {
     width: '100%',
     height: 156,
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.white
+  },
+  specialLessonFilterRow: {
+    flexDirection: 'row',
+    gap: 6
+  },
+  specialLessonFilterButton: {
+    flex: 1,
+    minHeight: 36,
+    borderRadius: radius.md,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.blue200,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10
+  },
+  specialLessonFilterButtonActive: {
+    backgroundColor: colors.blue700,
+    borderColor: colors.blue700
+  },
+  specialLessonFilterText: {
+    ...type.extraBold,
+    color: colors.blue700,
+    fontSize: 13,
+    fontWeight: '900'
+  },
+  specialLessonFilterTextActive: {
+    color: colors.white
   },
   specialStatusBadge: {
     ...type.extraBold,
-    color: colors.blue700,
-    fontSize: 12,
+    color: colors.blue800,
+    fontSize: 11,
     fontWeight: '900',
-    backgroundColor: colors.aqua100,
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
+    backgroundColor: colors.blue100,
+    borderRadius: radius.sm,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
     overflow: 'hidden'
   },
   specialStatusBadgeApproved: {
-    color: colors.white,
-    backgroundColor: colors.success
+    color: colors.successText,
+    backgroundColor: colors.successBg
   },
   adminOverview: {
     backgroundColor: colors.card,
-    borderRadius: 8,
-    padding: 16,
+    borderRadius: radius.md,
+    padding: spacing.lg,
     borderWidth: 1,
     borderColor: colors.line,
-    gap: 10,
+    gap: spacing.md,
     ...shadows.card
   },
   adminOverviewHeader: {
@@ -5220,21 +9631,31 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12
   },
+  adminOverviewTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap'
+  },
   adminOverviewTitle: {
     ...type.extraBold,
     color: colors.ink,
-    fontSize: 18,
-    fontWeight: '900'
+    fontSize: typography.sectionTitle.fontSize,
+    lineHeight: typography.sectionTitle.lineHeight,
+    fontWeight: '900',
+    flexShrink: 1,
+    minWidth: 0
   },
   adminOverviewCount: {
     ...type.bold,
-    color: colors.blue700,
+    color: colors.muted,
     fontSize: 13,
-    fontWeight: '800'
+    fontWeight: '800',
+    flexShrink: 0
   },
   emptyState: {
     minHeight: 76,
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.blue50,
     alignItems: 'center',
     justifyContent: 'center',
@@ -5242,72 +9663,32 @@ const styles = StyleSheet.create({
   },
   emptyStateText: {
     ...type.bold,
-    color: colors.blue700,
+    color: colors.muted,
     fontSize: 14,
     fontWeight: '800'
   },
   adminReservationRow: {
     minHeight: 66,
-    borderRadius: 8,
-    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.line,
     padding: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12
+    gap: 12,
+    ...shadows.card
   },
   adminScheduleRow: {
     minHeight: 76,
-    borderRadius: 8,
-    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.line,
     padding: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12
-  },
-  calendarGrid: {
-    alignSelf: 'flex-start',
-    borderWidth: 1,
-    borderColor: colors.line,
-    borderRadius: 8,
-    overflow: 'hidden',
-    backgroundColor: colors.white
-  },
-  calendarRow: {
-    flexDirection: 'row'
-  },
-  calendarFrame: {
-    borderWidth: 1,
-    borderColor: colors.line,
-    borderRadius: 8,
-    overflow: 'hidden',
-    backgroundColor: colors.white
-  },
-  calendarPinnedHeader: {
-    flexDirection: 'row',
-    backgroundColor: colors.blue900,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.lineStrong
-  },
-  calendarHorizontalScroll: {
-    flex: 1
-  },
-  calendarDateHeaderRow: {
-    flexDirection: 'row'
-  },
-  calendarBodyScroll: {
-    maxHeight: 560
-  },
-  calendarBodyRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start'
-  },
-  calendarTimeColumn: {
-    width: 64,
-    backgroundColor: colors.blue50
   },
   calendarAddPanel: {
     borderRadius: 8,
@@ -5326,6 +9707,13 @@ const styles = StyleSheet.create({
     flex: 1.15,
     minWidth: 118
   },
+  calendarTimeInput: {
+    width: 88,
+    paddingHorizontal: 10
+  },
+  calendarAddInstructorInput: {
+    minWidth: 96
+  },
   lessonDurationSelector: {
     flexDirection: 'row',
     gap: 6
@@ -5342,8 +9730,8 @@ const styles = StyleSheet.create({
     flex: 1
   },
   lessonDurationButtonActive: {
-    backgroundColor: colors.blue900,
-    borderColor: colors.blue900
+    backgroundColor: colors.blue700,
+    borderColor: colors.blue700
   },
   lessonDurationButtonText: {
     ...type.extraBold,
@@ -5398,8 +9786,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center'
   },
   calendarAssignmentMemberChipActive: {
-    backgroundColor: colors.blue900,
-    borderColor: colors.blue900
+    backgroundColor: colors.blue700,
+    borderColor: colors.blue700
   },
   calendarAssignmentMemberName: {
     ...type.extraBold,
@@ -5420,202 +9808,12 @@ const styles = StyleSheet.create({
   calendarAssignmentMemberMetaActive: {
     color: colors.aqua100
   },
-  calendarTimeCell: {
-    width: 64,
-    minHeight: 152,
-    paddingHorizontal: 8,
-    borderRightWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: colors.line,
-    backgroundColor: colors.blue50,
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  calendarHeaderTimeCell: {
-    minHeight: 58
-  },
-  calendarTimeText: {
-    ...type.extraBold,
-    color: colors.blue800,
-    fontSize: 13,
-    fontWeight: '900'
-  },
-  calendarDateHeaderCell: {
-    width: 158,
-    minHeight: 58,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRightWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: colors.line,
-    backgroundColor: colors.blue900,
-    justifyContent: 'center'
-  },
-  calendarDateText: {
-    ...type.extraBold,
-    color: colors.white,
-    fontSize: 15,
-    fontWeight: '900'
-  },
-  calendarWeekdayText: {
-    ...type.bold,
-    color: colors.aqua100,
-    fontSize: 12,
-    fontWeight: '800',
-    marginTop: 2
-  },
-  calendarSlotCell: {
-    width: 158,
-    minHeight: 152,
-    padding: 10,
-    borderRightWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: colors.line,
-    backgroundColor: colors.surface,
-    gap: 7
-  },
-  calendarAssignedSlotCell: {
-    backgroundColor: colors.white,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.blue700
-  },
-  calendarUnassignedSlotCell: {
-    backgroundColor: '#FBFDFF',
-    borderStyle: 'dashed'
-  },
-  calendarClosedSlotCell: {
-    backgroundColor: '#F1F5F7',
-    borderStyle: 'dashed',
-    opacity: 0.9
-  },
-  calendarEmptySlotCell: {
-    backgroundColor: colors.white
-  },
-  calendarOpenSlotCell: {
-    backgroundColor: colors.blue50
-  },
-  calendarBookedSlotCell: {
-    borderColor: colors.lineStrong
-  },
-  calendarCellTopRow: {
-    minHeight: 30,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6
-  },
-  calendarInstructorBlock: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4
-  },
-  calendarInstructorChip: {
-    ...type.extraBold,
-    flex: 1,
-    minWidth: 0,
-    alignSelf: 'flex-start',
-    color: colors.blue800,
-    fontSize: 11,
-    fontWeight: '900',
-    backgroundColor: colors.aqua100,
-    borderRadius: 8,
-    paddingHorizontal: 7,
-    paddingVertical: 4
-  },
-  calendarDurationChip: {
-    ...type.extraBold,
-    color: colors.blue700,
-    fontSize: 10,
-    fontWeight: '900',
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.blue200,
-    borderRadius: 8,
-    paddingHorizontal: 6,
-    paddingVertical: 4,
-    overflow: 'hidden'
-  },
-  calendarAssignmentBadge: {
-    ...type.extraBold,
-    color: colors.white,
-    fontSize: 10,
-    fontWeight: '900',
-    backgroundColor: colors.blue900,
-    borderRadius: 8,
-    paddingHorizontal: 7,
-    paddingVertical: 4,
-    overflow: 'hidden'
-  },
-  calendarAssignmentBadgeEmpty: {
-    color: colors.blue700,
-    backgroundColor: colors.blue50,
-    borderWidth: 1,
-    borderColor: colors.blue200
-  },
-  calendarAssignmentBadgeClosed: {
-    color: colors.muted,
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.lineStrong
-  },
-  calendarInstructorText: {
-    ...type.extraBold,
-    flex: 1,
-    minWidth: 0,
-    color: colors.ink,
-    fontSize: 14,
-    fontWeight: '900'
-  },
-  calendarCapacityText: {
-    ...type.extraBold,
-    color: colors.blue700,
-    fontSize: 12,
-    fontWeight: '900'
-  },
-  calendarMemberLines: {
-    flex: 1,
-    gap: 3
-  },
-  calendarCapacitySelector: {
-    flexDirection: 'row',
-    gap: 4
-  },
-  calendarCapacityButton: {
-    flex: 1,
-    minHeight: 28,
-    borderRadius: 8,
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.blue200,
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  calendarCapacityButtonActive: {
-    backgroundColor: colors.blue900,
-    borderColor: colors.blue900
-  },
-  calendarCapacityButtonText: {
-    ...type.extraBold,
-    color: colors.blue700,
-    fontSize: 10,
-    fontWeight: '900'
-  },
-  calendarCapacityButtonTextActive: {
-    color: colors.white
-  },
   calendarMemberText: {
     ...type.bold,
     color: colors.ink,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '800'
-  },
-  calendarSubstituteRow: {
-    minHeight: 22,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4
   },
   calendarSubstituteName: {
     flex: 1,
@@ -5624,15 +9822,17 @@ const styles = StyleSheet.create({
   calendarInlineCancelButton: {
     width: 22,
     height: 22,
-    borderRadius: 8,
-    backgroundColor: '#FFF5F5',
+    borderRadius: radius.md,
+    backgroundColor: colors.dangerBg,
     borderWidth: 1,
-    borderColor: '#F3C5C5',
+    borderColor: colors.dangerLine,
     alignItems: 'center',
     justifyContent: 'center'
   },
   calendarMemberPrimaryText: {
     ...type.extraBold,
+    flex: 1,
+    minWidth: 0,
     color: colors.ink,
     fontSize: 17,
     lineHeight: 22,
@@ -5649,96 +9849,6 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 12,
     fontWeight: '700'
-  },
-  calendarUnassignedTitle: {
-    ...type.extraBold,
-    color: colors.muted,
-    fontSize: 15,
-    fontWeight: '900'
-  },
-  calendarCellFooter: {
-    minHeight: 30,
-    gap: 6
-  },
-  calendarCellActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6
-  },
-  calendarOpenSeatText: {
-    ...type.bold,
-    color: colors.muted,
-    fontSize: 11,
-    fontWeight: '800'
-  },
-  calendarOpenSeatActiveText: {
-    color: colors.blue700
-  },
-  calendarEditButton: {
-    flex: 1,
-    minHeight: 28,
-    borderRadius: 8,
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.blue200,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 7
-  },
-  calendarEditButtonText: {
-    ...type.extraBold,
-    color: colors.blue700,
-    fontSize: 11,
-    fontWeight: '900'
-  },
-  calendarAssignButton: {
-    flex: 1,
-    minHeight: 28,
-    borderRadius: 8,
-    backgroundColor: colors.aqua100,
-    borderWidth: 1,
-    borderColor: colors.blue200,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 5
-  },
-  calendarAssignButtonActive: {
-    backgroundColor: '#FFF5F5',
-    borderColor: '#F3C5C5'
-  },
-  calendarAssignButtonText: {
-    ...type.extraBold,
-    color: colors.blue700,
-    fontSize: 10,
-    fontWeight: '900'
-  },
-  calendarAssignButtonTextActive: {
-    color: colors.danger
-  },
-  calendarDeleteButton: {
-    flex: 1,
-    minHeight: 28,
-    borderRadius: 8,
-    backgroundColor: '#FFF5F5',
-    borderWidth: 1,
-    borderColor: '#F3C5C5',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 7
-  },
-  calendarDeleteButtonText: {
-    ...type.extraBold,
-    color: colors.danger,
-    fontSize: 11,
-    fontWeight: '900'
-  },
-  calendarInstructorInput: {
-    flex: 1,
-    minWidth: 0,
-    minHeight: 34,
-    height: 34,
-    paddingHorizontal: 8,
-    fontSize: 12
   },
   adminReservationTime: {
     width: 76
@@ -5788,7 +9898,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 8,
-    backgroundColor: colors.blue900,
+    backgroundColor: colors.blue700,
     alignItems: 'center',
     justifyContent: 'center'
   },
@@ -5816,8 +9926,8 @@ const styles = StyleSheet.create({
     marginBottom: 8
   },
   memberPickerRowActive: {
-    backgroundColor: colors.blue900,
-    borderColor: colors.blue900
+    backgroundColor: colors.blue700,
+    borderColor: colors.blue700
   },
   memberPickerName: {
     ...type.extraBold,
@@ -5847,11 +9957,13 @@ const styles = StyleSheet.create({
     borderColor: colors.blue200,
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 5,
     paddingHorizontal: 8
   },
   memberAdjustButtonDanger: {
     backgroundColor: colors.white,
-    borderColor: '#F3C5C5'
+    borderColor: colors.dangerLine
   },
   memberAdjustButtonActive: {
     backgroundColor: colors.blue50,
@@ -5941,8 +10053,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center'
   },
   lessonCapacityButtonActive: {
-    backgroundColor: colors.blue900,
-    borderColor: colors.blue900
+    backgroundColor: colors.blue700,
+    borderColor: colors.blue700
   },
   lessonCapacityText: {
     ...type.extraBold,
@@ -5987,8 +10099,8 @@ const styles = StyleSheet.create({
   },
   adminComposer: {
     backgroundColor: colors.card,
-    borderRadius: 8,
-    padding: 16,
+    borderRadius: radius.md,
+    padding: spacing.lg,
     borderWidth: 1,
     borderColor: colors.line,
     gap: 10,
@@ -6007,14 +10119,14 @@ const styles = StyleSheet.create({
   },
   input: {
     minHeight: 48,
-    borderRadius: 8,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.line,
     paddingHorizontal: 14,
     ...type.regular,
     color: colors.ink,
     fontSize: 15,
-    backgroundColor: colors.surface
+    backgroundColor: colors.white
   },
   multilineInput: {
     minHeight: 104,
@@ -6024,7 +10136,7 @@ const styles = StyleSheet.create({
   previewImage: {
     width: '100%',
     height: 160,
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.blue50
   },
   composerActions: {
@@ -6034,7 +10146,7 @@ const styles = StyleSheet.create({
   secondaryButton: {
     flex: 1,
     minHeight: 46,
-    borderRadius: 8,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.blue700,
     alignItems: 'center',
@@ -6050,8 +10162,8 @@ const styles = StyleSheet.create({
   publishButton: {
     flex: 1,
     minHeight: 46,
-    borderRadius: 8,
-    backgroundColor: colors.blue900,
+    borderRadius: radius.md,
+    backgroundColor: colors.blue700,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
@@ -6062,10 +10174,58 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontWeight: '900'
   },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: colors.overlay,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 18
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 480,
+    maxHeight: '88%',
+    borderRadius: radius.md,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: spacing.md,
+    gap: spacing.md,
+    ...shadows.floating
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10
+  },
+  modalTitle: {
+    ...type.extraBold,
+    color: colors.ink,
+    fontSize: 18,
+    fontWeight: '900'
+  },
+  modalCloseButton: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.md,
+    backgroundColor: colors.aqua100,
+    borderWidth: 1,
+    borderColor: colors.blue200,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  modalMemberList: {
+    maxHeight: 260
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 10
+  },
   noticeCard: {
     backgroundColor: colors.card,
-    borderRadius: 8,
-    padding: 16,
+    borderRadius: radius.md,
+    padding: spacing.lg,
     borderWidth: 1,
     borderColor: colors.line,
     gap: 8,
@@ -6074,7 +10234,7 @@ const styles = StyleSheet.create({
   noticeImage: {
     width: '100%',
     height: 170,
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.blue50,
     marginBottom: 4
   },
@@ -6108,10 +10268,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700'
   },
+  noticeManageActions: {
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+    paddingTop: 8,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8
+  },
   alertHero: {
-    backgroundColor: colors.blue900,
-    borderRadius: 8,
-    padding: 18,
+    backgroundColor: colors.blue700,
+    borderRadius: radius.md,
+    padding: spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14
@@ -6124,10 +10292,10 @@ const styles = StyleSheet.create({
   },
   preferenceRow: {
     backgroundColor: colors.card,
-    borderRadius: 8,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.line,
-    padding: 16,
+    padding: spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -6137,7 +10305,7 @@ const styles = StyleSheet.create({
   preferenceIcon: {
     width: 40,
     height: 40,
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.blue50,
     alignItems: 'center',
     justifyContent: 'center'
@@ -6154,8 +10322,8 @@ const styles = StyleSheet.create({
   },
   testNotificationButton: {
     minHeight: 50,
-    borderRadius: 8,
-    backgroundColor: colors.blue900,
+    borderRadius: radius.md,
+    backgroundColor: colors.blue700,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
@@ -6169,8 +10337,8 @@ const styles = StyleSheet.create({
   },
   profileCard: {
     backgroundColor: colors.card,
-    borderRadius: 8,
-    padding: 18,
+    borderRadius: radius.md,
+    padding: spacing.lg,
     borderWidth: 1,
     borderColor: colors.line,
     flexDirection: 'row',
@@ -6181,8 +10349,8 @@ const styles = StyleSheet.create({
   avatar: {
     width: 62,
     height: 62,
-    borderRadius: 8,
-    backgroundColor: colors.blue900,
+    borderRadius: radius.md,
+    backgroundColor: colors.blue700,
     alignItems: 'center',
     justifyContent: 'center'
   },
@@ -6205,11 +10373,31 @@ const styles = StyleSheet.create({
   },
   infoList: {
     backgroundColor: colors.card,
-    borderRadius: 8,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.line,
     overflow: 'hidden',
     ...shadows.card
+  },
+  devSwitchCard: {
+    backgroundColor: colors.card,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.blue200,
+    padding: 14,
+    gap: 10,
+    ...shadows.card
+  },
+  devSwitchHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  devSwitchTitle: {
+    ...type.extraBold,
+    color: colors.ink,
+    fontSize: 15,
+    fontWeight: '900'
   },
   infoRow: {
     minHeight: 58,
@@ -6235,10 +10423,10 @@ const styles = StyleSheet.create({
   },
   logoutButton: {
     minHeight: 50,
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
-    borderColor: '#F3C5C5',
+    borderColor: colors.dangerLine,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
@@ -6252,10 +10440,10 @@ const styles = StyleSheet.create({
   },
   deleteAccountButton: {
     minHeight: 50,
-    borderRadius: 8,
-    backgroundColor: '#FFF5F5',
+    borderRadius: radius.md,
+    backgroundColor: colors.dangerBg,
     borderWidth: 1,
-    borderColor: '#F3C5C5',
+    borderColor: colors.dangerLine,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
@@ -6269,36 +10457,39 @@ const styles = StyleSheet.create({
   },
   tabBar: {
     position: 'absolute',
-    left: 14,
-    right: 14,
+    left: 12,
+    right: 12,
     bottom: 12,
-    minHeight: 70,
-    borderRadius: 8,
+    minHeight: 68,
+    borderRadius: radius.md,
     backgroundColor: colors.card,
     borderWidth: 1,
-    borderColor: colors.line,
+    borderColor: colors.blue200,
     flexDirection: 'row',
     padding: 7,
     gap: 6,
-    ...shadows.soft
+    ...shadows.floating
   },
   tabItem: {
     flex: 1,
-    borderRadius: 8,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 3
+    gap: 3,
+    borderWidth: 1,
+    borderColor: 'transparent'
   },
   tabItemActive: {
-    backgroundColor: colors.blue900
+    backgroundColor: colors.aqua100,
+    borderColor: colors.blue200
   },
   tabLabel: {
     ...type.extraBold,
-    color: colors.blue700,
+    color: colors.muted,
     fontSize: 11,
     fontWeight: '900'
   },
   tabLabelActive: {
-    color: colors.white
+    color: colors.blue900
   }
 });

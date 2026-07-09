@@ -12,6 +12,15 @@ cp .env.example .env
 
 `.env`에는 Supabase Project URL과 publishable key를 넣습니다. service role 또는 secret key는 앱에 넣지 마세요.
 
+개발 중 관리자/회원 계정을 빠르게 오가며 테스트하려면 `.env`에 테스트 계정을 추가합니다. 이 값이 있으면 Expo Go 개발 모드에서 로그인 화면과 내정보 화면에 테스트 계정 전환 버튼이 표시됩니다.
+
+```bash
+EXPO_PUBLIC_TEST_ADMIN_EMAIL=
+EXPO_PUBLIC_TEST_ADMIN_PASSWORD=
+EXPO_PUBLIC_TEST_MEMBER_EMAIL=
+EXPO_PUBLIC_TEST_MEMBER_PASSWORD=
+```
+
 ```bash
 npm install
 npm run ios
@@ -31,7 +40,13 @@ npm run web
 - 고정 수업 회원이 못 오는 날 결석 처리하면 해당 수업이 빈자리로 공개
 - 다른 회원은 공개된 빈자리만 대체 예약
 - 회원 홈에서 다음 수업, 진행 강사, 고정 수업, 잔여 횟수 확인
-- 다음 고정수업에 한해 빈자리로 수업 변경 요청, 관리자 승인/거절
+- 날짜별 고정수업을 개별 결석 처리하거나 빈자리로 변경 요청, 관리자 승인/거절
+- 회원이 배정되지 않은 열린 수업은 추가 수업으로 신청하고, 관리자는 승인/거절 시 코멘트를 전달
+- 닫힌 시간은 영업시간 05:00-22:00 안에서 자유수영으로 신청
+- 이벤트성 특별수업 등록, 선착순 신청, 정원 초과 대기, 관리자 승인/거절
+- 수업 종료 후 회원별 사진/동영상/100자 피드백 등록 및 회원 확인
+- 회원 불편사항/요구사항 등록과 관리자 처리
+- 관리자 상품 등록, 회원 구매 신청, 관리자 구매 확정/취소
 - 관리자 홈에서 날짜별 운영표, 회원별 고정 수업, 담당 강사, 잔여 횟수 확인 및 수정
 - 관리자 전용 공지 작성 및 이미지 첨부
 - 수업 임박, 예약 확정, 공지사항, 출석 리마인드, 강사/일정 변경, 재예약 추천 알림 설정
@@ -46,13 +61,20 @@ npm run web
 - `fixed_lessons`: 회원별 고정 요일/시간/담당 강사/수업 상품 인원 배정
 - `lesson_absences`: 고정 수업 회원의 날짜별 결석 처리
 - `reservations`: 결석으로 열린 빈자리의 대체 예약
+- `lesson_feedbacks`: 수업 종료 후 회원별 사진/동영상/간단 피드백
+- `special_lessons`, `special_lesson_registrations`: 특별수업 모집과 선착순 신청/승인
+- `member_requests`: 회원 불편사항과 요구사항 처리
+- `store_products`, `store_orders`: 수영용품 상품과 구매 신청
 - `pass_transactions`: 횟수권 충전, 차감, 취소 복구 이력
 - `notices`: 공지사항 데이터
 - Supabase Storage `notice-images`: 공지사항 이미지
+- Supabase Storage `lesson-feedback`, `special-lesson-images`: 수업 피드백 미디어와 특별수업 포스터
 
 고정 회원의 결석 처리는 `toggle_fixed_lesson_absence(slot_id)` RPC로 처리합니다. 다른 회원의 빈자리 대체 예약은 `toggle_open_slot_reservation(slot_id)` RPC로 처리합니다. 앱은 직접 여러 테이블을 수정하지 않고 RPC를 호출하므로 예약 가능 여부, 횟수권 차감/복구, 중복 예약 방지가 DB 트랜잭션 안에서 처리됩니다.
 
-다음 고정수업 변경 요청은 `lesson_change_requests`에 저장됩니다. 회원은 빈자리인 수업으로만 요청할 수 있고, 관리자가 승인하면 원래 다음 고정수업은 결석 처리로 열리며 요청한 빈자리에 회원이 배정됩니다. 이 변경 승인은 추가 수업이 아니므로 횟수권을 별도로 차감하지 않습니다.
+고정수업 변경 요청은 `lesson_change_requests`에 저장됩니다. 회원은 날짜별 고정수업을 선택한 뒤 빈자리인 수업으로만 변경 요청할 수 있고, 관리자가 승인하면 원래 고정수업은 결석 처리로 열리며 요청한 빈자리에 회원이 배정됩니다. 이 변경 승인은 추가 수업이 아니므로 횟수권을 별도로 차감하지 않습니다.
+
+추가 수업과 자유수영 신청은 `lesson_assignment_requests`에 저장됩니다. 추가 수업은 열린 수업이지만 회원이 배정되지 않은 시간에만 가능하고, 자유수영은 05:00-22:00 영업시간 안의 닫힌 시간에만 가능합니다. 관리자는 승인 또는 거절하면서 `review_comment`로 회원에게 처리 코멘트를 남길 수 있습니다.
 
 관리자의 회원 횟수권 조정은 `adjust_member_pass(user_id, amount, reason)` RPC로 처리합니다. 특정 날짜 수업의 대체 강사 변경은 `update_lesson_slot_instructor(slot_id, instructor)` RPC로 처리합니다. 앱에는 DB 비밀번호나 service role key를 넣지 않고, 공개 가능한 publishable key만 둡니다.
 

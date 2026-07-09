@@ -2,7 +2,8 @@ import { ClassSlot, DayId, DayOption, NotificationPrefs, Notice } from './types'
 
 export const CURRENT_SCHEDULE_VERSION = 6;
 export const DISPLAY_DAYS = 14;
-export const SYNC_DAYS = 28;
+export const SYNC_DAYS = 30;
+export const SYNC_PAST_DAYS = 30;
 export const APP_TIME_ZONE = 'Asia/Seoul';
 
 export const DAYS: Array<{ id: DayId; label: string; shortLabel: string }> = [
@@ -15,8 +16,9 @@ export const DAYS: Array<{ id: DayId; label: string; shortLabel: string }> = [
   { id: 'sun', label: '일요일', shortLabel: '일' }
 ];
 
-const WEEKDAY_HOURS = Array.from({ length: 18 }, (_, index) => index + 6);
-const WEEKEND_HOURS = Array.from({ length: 10 }, (_, index) => index + 9);
+const POOL_HOURS = Array.from({ length: 18 }, (_, index) => index + 5);
+const WEEKDAY_HOURS = POOL_HOURS;
+const WEEKEND_HOURS = POOL_HOURS;
 
 const datePartsFormatter = new Intl.DateTimeFormat('en-CA', {
   timeZone: APP_TIME_ZONE,
@@ -197,7 +199,8 @@ export function createInitialSlots(): ClassSlot[] {
         id: `local-${dateKey}-${hour}`,
         startsAt,
         instructor,
-        capacity: 1
+        capacity: 1,
+        isActive: false
       });
     });
   });
