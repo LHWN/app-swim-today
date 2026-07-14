@@ -205,10 +205,10 @@ const type = {
 
 const providerMeta: Record<AuthProvider, { label: string; color: string; textColor: string }> = {
   email: { label: '이메일', color: colors.blue900, textColor: colors.white },
-  naver: { label: '네이버로 시작', color: '#03C75A', textColor: '#FFFFFF' },
-  kakao: { label: '카카오로 시작', color: '#FEE500', textColor: '#181600' },
-  google: { label: 'Google로 시작', color: '#FFFFFF', textColor: '#263238' },
-  apple: { label: 'Apple로 시작', color: '#111111', textColor: '#FFFFFF' }
+  naver: { label: '네이버로 시작', color: colors.blue700, textColor: colors.white },
+  kakao: { label: '카카오로 시작', color: colors.blue50, textColor: colors.blue900 },
+  google: { label: 'Google로 시작', color: colors.white, textColor: colors.ink },
+  apple: { label: 'Apple로 시작', color: colors.ink, textColor: colors.white }
 };
 
 const notificationLabels: Record<NotificationKey, { title: string; icon: keyof typeof Feather.glyphMap }> = {
@@ -1535,12 +1535,12 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle="dark-content" />
       <KeyboardAvoidingView style={styles.keyboardAvoidingView} behavior={keyboardAvoidingBehavior}>
         <View style={styles.appShell}>
           <View style={styles.header}>
             <View style={styles.headerBrand}>
-              <Image source={logoOnNavyImage} style={styles.headerLogoImage} resizeMode="contain" />
+              <Image source={brandLogoImage} style={styles.headerLogoImage} resizeMode="contain" />
               <View style={styles.headerTextBlock}>
                 <Text style={styles.headerTitle}>{user.name}님</Text>
               </View>
@@ -1764,11 +1764,11 @@ function LoginScreen({
 
   return (
     <SafeAreaView style={styles.loginSafeArea}>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle="dark-content" />
       <KeyboardAvoidingView style={styles.keyboardAvoidingView} behavior={keyboardAvoidingBehavior}>
         <KeyboardAwareScrollView contentContainerStyle={styles.loginScrollContent} showsVerticalScrollIndicator={false}>
           <View style={styles.loginHero}>
-            <Image source={logoOnNavyImage} style={styles.loginHeroImage} resizeMode="contain" />
+            <Image source={brandLogoImage} style={styles.loginHeroImage} resizeMode="contain" />
             {/* <Text style={styles.loginTitle}>오늘도수영</Text> */}
             <View style={styles.loginIconRow}>
               <View style={styles.loginIconChip}>
@@ -7955,7 +7955,7 @@ function SectionHeader({ title, actionLabel, onAction }: { title: string; action
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: colors.blue900
+    backgroundColor: colors.surface
   },
   launchScreen: {
     flex: 1,
@@ -7977,16 +7977,16 @@ const styles = StyleSheet.create({
     flex: 1
   },
   header: {
-    backgroundColor: colors.blue800,
+    backgroundColor: colors.white,
     paddingHorizontal: spacing.xl,
     paddingTop: spacing.lg,
-    paddingBottom: spacing.md,
+    paddingBottom: spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.lg,
     borderBottomWidth: 1,
-    borderBottomColor: colors.navyLine
+    borderBottomColor: colors.line
   },
   headerBrand: {
     flex: 1,
@@ -7996,8 +7996,8 @@ const styles = StyleSheet.create({
     gap: 12
   },
   headerLogoImage: {
-    width: 58,
-    height: 42
+    width: 52,
+    height: 40
   },
   headerTextBlock: {
     flex: 1,
@@ -8011,23 +8011,23 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     ...type.extraBold,
-    color: colors.white,
-    fontSize: 20,
+    color: colors.ink,
+    fontSize: 22,
     fontWeight: '800',
     maxWidth: 210
   },
   contactButton: {
-    minWidth: 92,
-    height: 38,
+    minWidth: 100,
+    minHeight: 48,
     borderRadius: radius.md,
-    backgroundColor: colors.navyGlass,
+    backgroundColor: colors.blue700,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
     gap: 6,
     borderWidth: 1,
-    borderColor: colors.navyLineStrong,
-    paddingHorizontal: 12
+    borderColor: colors.blue700,
+    paddingHorizontal: 14
   },
   contactButtonText: {
     ...type.extraBold,
@@ -8039,28 +8039,30 @@ const styles = StyleSheet.create({
     flex: 1
   },
   scrollContent: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
-    paddingBottom: 104,
-    gap: spacing.md
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xl,
+    paddingBottom: 112,
+    gap: spacing.lg
   },
   loginSafeArea: {
     flex: 1,
-    backgroundColor: colors.blue800
+    backgroundColor: colors.surface
   },
   loginScrollContent: {
-    flexGrow: 1
+    flexGrow: 1,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.xxl,
+    justifyContent: 'center',
+    gap: spacing.xl
   },
   loginHero: {
-    flex: 1,
-    minHeight: 280,
-    paddingHorizontal: 28,
+    minHeight: 190,
     justifyContent: 'center',
-    alignItems: 'flex-start'
+    alignItems: 'center'
   },
   loginHeroImage: {
-    width: 236,
-    height: 214
+    width: 220,
+    height: 164
   },
   loginTitle: {
     ...type.extraBold,
@@ -8072,34 +8074,38 @@ const styles = StyleSheet.create({
   loginIconRow: {
     flexDirection: 'row',
     gap: 10,
-    marginTop: 18
+    marginTop: 14
   },
   loginIconChip: {
-    width: 42,
-    height: 42,
-    borderRadius: 8,
+    width: 44,
+    height: 44,
+    borderRadius: radius.md,
     backgroundColor: colors.aqua100,
+    borderWidth: 1,
+    borderColor: colors.blue200,
     alignItems: 'center',
     justifyContent: 'center'
   },
   loginPanel: {
     backgroundColor: colors.white,
-    padding: 22,
-    borderTopLeftRadius: radius.md,
-    borderTopRightRadius: radius.md,
-    gap: 12
+    padding: spacing.xl,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: spacing.md,
+    ...shadows.soft
   },
   roleSwitch: {
     flexDirection: 'row',
     backgroundColor: colors.blue50,
-    borderRadius: 8,
+    borderRadius: radius.md,
     padding: 4,
     marginBottom: 4
   },
   roleButton: {
     flex: 1,
-    minHeight: 42,
-    borderRadius: 6,
+    minHeight: 48,
+    borderRadius: radius.sm,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
@@ -8117,12 +8123,12 @@ const styles = StyleSheet.create({
     color: colors.white
   },
   devLoginPanel: {
-    borderRadius: 8,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.blue200,
     backgroundColor: colors.blue50,
-    padding: 10,
-    gap: 8
+    padding: spacing.md,
+    gap: spacing.sm
   },
   devLoginTitle: {
     ...type.extraBold,
@@ -8136,8 +8142,8 @@ const styles = StyleSheet.create({
   },
   devAccountButton: {
     flex: 1,
-    minHeight: 42,
-    borderRadius: 8,
+    minHeight: 48,
+    borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.blue200,
@@ -8158,8 +8164,8 @@ const styles = StyleSheet.create({
     fontWeight: '900'
   },
   ssoButton: {
-    minHeight: 54,
-    borderRadius: 8,
+    minHeight: 56,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 18
@@ -8174,8 +8180,8 @@ const styles = StyleSheet.create({
     fontWeight: '800'
   },
   authSubmitButton: {
-    minHeight: 54,
-    borderRadius: 8,
+    minHeight: 56,
+    borderRadius: radius.md,
     backgroundColor: colors.blue700,
     alignItems: 'center',
     justifyContent: 'center',
@@ -8193,7 +8199,7 @@ const styles = StyleSheet.create({
     opacity: 0.68
   },
   phoneLink: {
-    minHeight: 44,
+    minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -8206,7 +8212,7 @@ const styles = StyleSheet.create({
   },
   heroCard: {
     backgroundColor: colors.white,
-    borderRadius: radius.md,
+    borderRadius: radius.xl,
     padding: spacing.xl,
     gap: spacing.lg,
     borderWidth: 1,
@@ -8215,13 +8221,11 @@ const styles = StyleSheet.create({
   },
   focusCard: {
     backgroundColor: colors.white,
-    borderRadius: radius.md,
+    borderRadius: radius.xl,
     padding: spacing.xl,
     gap: spacing.lg,
     borderWidth: 1,
-    borderColor: colors.blue200,
-    borderTopWidth: 3,
-    borderTopColor: colors.aqua500,
+    borderColor: colors.line,
     ...shadows.soft
   },
   heroTopRow: {
@@ -8249,16 +8253,15 @@ const styles = StyleSheet.create({
   heroTitle: {
     ...type.extraBold,
     color: colors.blue900,
-    fontSize: 28,
+    fontSize: 30,
     fontWeight: '900',
     marginTop: 2
   },
   heroBody: {
-    ...type.bold,
+    ...type.regular,
     color: colors.inkSoft,
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: '800',
+    fontSize: typography.body.fontSize,
+    lineHeight: typography.body.lineHeight,
     marginTop: 6
   },
   focusBadge: {
@@ -8285,7 +8288,7 @@ const styles = StyleSheet.create({
     minWidth: 0
   },
   primaryButton: {
-    height: 46,
+    minHeight: 56,
     borderRadius: radius.md,
     backgroundColor: colors.blue700,
     alignItems: 'center',
@@ -8306,7 +8309,7 @@ const styles = StyleSheet.create({
     gap: 8
   },
   memberFixedScheduleLine: {
-    minHeight: 32,
+    minHeight: 40,
     borderRadius: radius.md,
     backgroundColor: colors.blue50,
     borderWidth: 1,
@@ -8325,7 +8328,7 @@ const styles = StyleSheet.create({
     minWidth: 0
   },
   memberPendingLine: {
-    minHeight: 32,
+    minHeight: 40,
     borderRadius: radius.md,
     backgroundColor: colors.warningBg,
     borderWidth: 1,
@@ -8344,7 +8347,7 @@ const styles = StyleSheet.create({
     minWidth: 0
   },
   memberDetailHeader: {
-    minHeight: 48,
+    minHeight: 56,
     borderRadius: radius.md,
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -8352,11 +8355,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    paddingHorizontal: spacing.sm,
+    paddingHorizontal: spacing.md,
     ...shadows.card
   },
   memberDetailBackButton: {
-    minHeight: 36,
+    minHeight: 48,
     borderRadius: radius.md,
     backgroundColor: colors.blue50,
     borderWidth: 1,
@@ -8389,7 +8392,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.card,
     borderRadius: radius.md,
-    padding: spacing.md,
+    padding: spacing.lg,
     borderWidth: 1,
     borderColor: colors.line,
     ...shadows.card
@@ -8414,7 +8417,7 @@ const styles = StyleSheet.create({
   },
   summaryItem: {
     flex: 1,
-    minHeight: 64,
+    minHeight: 72,
     borderRadius: radius.md,
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -8440,37 +8443,37 @@ const styles = StyleSheet.create({
   homeSectionMenu: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.sm
+    gap: spacing.md
   },
   homeSectionMenuButton: {
     flexBasis: '48%',
     flexGrow: 1,
-    minHeight: 96,
-    borderRadius: radius.md,
+    minHeight: 116,
+    borderRadius: radius.lg,
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.line,
     alignItems: 'stretch',
     justifyContent: 'space-between',
-    gap: spacing.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    gap: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
     ...shadows.card
   },
   homeSectionMenuButtonActive: {
-    backgroundColor: colors.aqua100,
+    backgroundColor: colors.white,
     borderColor: colors.blue700
   },
   homeSectionMenuTopRow: {
-    minHeight: 36,
+    minHeight: 42,
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: spacing.sm
   },
   homeSectionMenuIcon: {
-    width: 36,
-    height: 36,
+    width: 42,
+    height: 42,
     borderRadius: radius.md,
     backgroundColor: colors.aqua100,
     alignItems: 'center',
@@ -8493,7 +8496,7 @@ const styles = StyleSheet.create({
   homeSectionMenuText: {
     ...type.extraBold,
     color: colors.ink,
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '900',
     flexShrink: 1,
     minWidth: 0
@@ -8514,8 +8517,8 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start'
   },
   infoIconButton: {
-    width: 22,
-    height: 22,
+    width: 24,
+    height: 24,
     borderRadius: radius.md,
     backgroundColor: colors.blue50,
     borderWidth: 1,
@@ -8532,8 +8535,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.blue200,
     borderRadius: radius.md,
-    paddingHorizontal: 11,
-    paddingVertical: 9,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     ...shadows.floating
   },
   tooltipCaret: {
@@ -8557,7 +8560,7 @@ const styles = StyleSheet.create({
   homeSectionMenuCount: {
     ...type.extraBold,
     minWidth: 28,
-    borderRadius: radius.md,
+    borderRadius: radius.sm,
     overflow: 'hidden',
     backgroundColor: colors.blue50,
     color: colors.blue800,
@@ -8572,7 +8575,7 @@ const styles = StyleSheet.create({
     color: colors.white
   },
   sectionHeader: {
-    marginTop: 6,
+    marginTop: spacing.sm,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between'
@@ -8588,7 +8591,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 2,
-    minHeight: 36
+    minHeight: 48
   },
   sectionActionText: {
     ...type.bold,
@@ -8600,14 +8603,14 @@ const styles = StyleSheet.create({
   },
   daySelector: {
     paddingHorizontal: spacing.xl,
-    paddingTop: spacing.md,
+    paddingTop: spacing.lg,
     paddingBottom: spacing.xl,
     gap: spacing.sm,
     minHeight: 90
   },
   dayPill: {
-    width: 54,
-    height: 54,
+    width: 60,
+    height: 60,
     borderRadius: radius.md,
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -8638,9 +8641,9 @@ const styles = StyleSheet.create({
   },
   slotList: {
     paddingHorizontal: spacing.xl,
-    paddingTop: spacing.sm,
-    paddingBottom: 104,
-    gap: 10
+    paddingTop: spacing.md,
+    paddingBottom: 112,
+    gap: spacing.md
   },
   passSummary: {
     marginHorizontal: spacing.xl,
@@ -8681,11 +8684,9 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     backgroundColor: colors.card,
     borderWidth: 1,
-    borderColor: colors.blue200,
-    borderTopWidth: 3,
-    borderTopColor: colors.aqua500,
-    padding: spacing.md,
-    gap: 10,
+    borderColor: colors.line,
+    padding: spacing.lg,
+    gap: spacing.md,
     ...shadows.card
   },
   changePickerHeader: {
@@ -8712,16 +8713,16 @@ const styles = StyleSheet.create({
     marginTop: 3
   },
   changePickerCloseButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 8,
+    width: 48,
+    height: 48,
+    borderRadius: radius.md,
     backgroundColor: colors.blue50,
     alignItems: 'center',
     justifyContent: 'center'
   },
   changeTargetRow: {
-    minHeight: 62,
-    borderRadius: 8,
+    minHeight: 68,
+    borderRadius: radius.md,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.line,
@@ -8736,8 +8737,8 @@ const styles = StyleSheet.create({
   },
   weekSelectorButton: {
     minWidth: 104,
-    minHeight: 52,
-    borderRadius: 8,
+    minHeight: 56,
+    borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.line,
@@ -8793,13 +8794,13 @@ const styles = StyleSheet.create({
     fontWeight: '800'
   },
   weekLessonRow: {
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.line,
-    borderLeftWidth: 4,
+    borderLeftWidth: 0,
     borderLeftColor: colors.success,
-    padding: 12,
+    padding: spacing.md,
     gap: 10
   },
   weekLessonRowClosed: {
@@ -8826,31 +8827,31 @@ const styles = StyleSheet.create({
     gap: 8
   },
   adminLessonToolbar: {
-    minHeight: 62,
-    marginHorizontal: 20,
-    marginBottom: 12,
-    borderRadius: 8,
+    minHeight: 68,
+    marginHorizontal: spacing.xl,
+    marginBottom: spacing.md,
+    borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.line,
-    padding: 12,
+    padding: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
     gap: 10
   },
   finalScheduleList: {
-    gap: 8,
-    paddingHorizontal: 20,
-    paddingBottom: 20
+    gap: spacing.md,
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.xl
   },
   finalScheduleRow: {
     minHeight: 86,
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.line,
-    padding: 12,
+    padding: spacing.md,
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 12
@@ -8862,17 +8863,17 @@ const styles = StyleSheet.create({
     gap: 8
   },
   lessonOperationList: {
-    gap: 10,
-    paddingHorizontal: 20,
-    paddingBottom: 22
+    gap: spacing.md,
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.xl
   },
   lessonOperationCard: {
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.line,
-    padding: 12,
-    gap: 12
+    padding: spacing.md,
+    gap: spacing.md
   },
   lessonOperationCardClosed: {
     backgroundColor: colors.surface,
@@ -8918,7 +8919,7 @@ const styles = StyleSheet.create({
     gap: 4
   },
   lessonPersonLine: {
-    minHeight: 42,
+    minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8
@@ -8952,8 +8953,8 @@ const styles = StyleSheet.create({
   },
   personLineButton: {
     minWidth: 48,
-    height: 32,
-    borderRadius: 8,
+    minHeight: 48,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.blue200,
     backgroundColor: colors.blue50,
@@ -9038,8 +9039,8 @@ const styles = StyleSheet.create({
     marginLeft: 2
   },
   reserveButton: {
-    width: 78,
-    height: 40,
+    minWidth: 84,
+    minHeight: 48,
     borderRadius: radius.md,
     backgroundColor: colors.blue700,
     alignItems: 'center',
@@ -9053,12 +9054,12 @@ const styles = StyleSheet.create({
     fontWeight: '900'
   },
   slotActionGroup: {
-    width: 74,
-    gap: 6
+    width: 84,
+    gap: 8
   },
   compactReserveButton: {
-    width: 74,
-    height: 34
+    width: 84,
+    minHeight: 48
   },
   compactReserveButtonText: {
     fontSize: 12
@@ -9082,7 +9083,7 @@ const styles = StyleSheet.create({
     fontSize: 13
   },
   secondaryActionButton: {
-    minHeight: 42,
+    minHeight: 48,
     borderRadius: radius.md,
     backgroundColor: colors.blue50,
     borderWidth: 1,
@@ -9209,7 +9210,7 @@ const styles = StyleSheet.create({
   },
   selectorChip: {
     minWidth: 46,
-    minHeight: 38,
+    minHeight: 48,
     borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
@@ -9220,7 +9221,7 @@ const styles = StyleSheet.create({
   },
   timeSelectorChip: {
     minWidth: 70,
-    minHeight: 38,
+    minHeight: 48,
     borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
@@ -9246,7 +9247,7 @@ const styles = StyleSheet.create({
     gap: 6
   },
   dropdownButton: {
-    minHeight: 46,
+    minHeight: 52,
     borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
@@ -9281,7 +9282,7 @@ const styles = StyleSheet.create({
     maxHeight: 220
   },
   dropdownOption: {
-    minHeight: 44,
+    minHeight: 48,
     paddingHorizontal: 12,
     paddingVertical: 9,
     justifyContent: 'center',
@@ -9318,7 +9319,7 @@ const styles = StyleSheet.create({
   multiTimeButton: {
     width: '22.5%',
     minWidth: 68,
-    minHeight: 36,
+    minHeight: 48,
     borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
@@ -9345,7 +9346,7 @@ const styles = StyleSheet.create({
   },
   memberFeedbackButton: {
     minWidth: 86,
-    minHeight: 36,
+    minHeight: 48,
     borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
@@ -9365,7 +9366,7 @@ const styles = StyleSheet.create({
   },
   requestApproveButton: {
     flex: 1,
-    minHeight: 42,
+    minHeight: 48,
     borderRadius: radius.md,
     backgroundColor: colors.blue700,
     alignItems: 'center',
@@ -9381,7 +9382,7 @@ const styles = StyleSheet.create({
   },
   requestRejectButton: {
     flex: 1,
-    minHeight: 42,
+    minHeight: 48,
     borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
@@ -9393,7 +9394,7 @@ const styles = StyleSheet.create({
   },
   requestNeutralButton: {
     flex: 1,
-    minHeight: 42,
+    minHeight: 48,
     borderRadius: radius.md,
     backgroundColor: colors.blue50,
     borderWidth: 1,
@@ -9581,7 +9582,7 @@ const styles = StyleSheet.create({
   },
   specialLessonFilterButton: {
     flex: 1,
-    minHeight: 36,
+    minHeight: 48,
     borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
@@ -9670,35 +9671,35 @@ const styles = StyleSheet.create({
     fontWeight: '800'
   },
   adminReservationRow: {
-    minHeight: 66,
+    minHeight: 72,
     borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.line,
-    padding: 12,
+    padding: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
     ...shadows.card
   },
   adminScheduleRow: {
-    minHeight: 76,
+    minHeight: 80,
     borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.line,
-    padding: 12,
+    padding: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12
   },
   calendarAddPanel: {
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.blue50,
     borderWidth: 1,
     borderColor: colors.blue200,
-    padding: 12,
-    gap: 10
+    padding: spacing.md,
+    gap: spacing.md
   },
   calendarAddRow: {
     flexDirection: 'row',
@@ -9721,8 +9722,8 @@ const styles = StyleSheet.create({
     gap: 6
   },
   lessonDurationButton: {
-    minHeight: 32,
-    borderRadius: 8,
+    minHeight: 48,
+    borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.blue200,
@@ -9745,12 +9746,12 @@ const styles = StyleSheet.create({
     color: colors.white
   },
   calendarAssignmentPanel: {
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.line,
-    padding: 12,
-    gap: 10
+    padding: spacing.md,
+    gap: spacing.md
   },
   calendarAssignmentHeader: {
     flexDirection: 'row',
@@ -9779,7 +9780,7 @@ const styles = StyleSheet.create({
   calendarAssignmentMemberChip: {
     minWidth: 92,
     minHeight: 48,
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.line,
@@ -9886,20 +9887,20 @@ const styles = StyleSheet.create({
     marginTop: 4
   },
   memberRow: {
-    minHeight: 78,
-    borderRadius: 8,
+    minHeight: 84,
+    borderRadius: radius.md,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.line,
-    padding: 12,
+    padding: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12
   },
   memberAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
+    width: 44,
+    height: 44,
+    borderRadius: radius.md,
     backgroundColor: colors.blue700,
     alignItems: 'center',
     justifyContent: 'center'
@@ -9917,8 +9918,8 @@ const styles = StyleSheet.create({
     maxHeight: 220
   },
   memberPickerRow: {
-    minHeight: 58,
-    borderRadius: 8,
+    minHeight: 64,
+    borderRadius: radius.md,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.line,
@@ -9951,9 +9952,9 @@ const styles = StyleSheet.create({
     color: colors.aqua100
   },
   memberAdjustButton: {
-    minWidth: 46,
-    height: 38,
-    borderRadius: 8,
+    minWidth: 48,
+    minHeight: 48,
+    borderRadius: radius.md,
     backgroundColor: colors.aqua100,
     borderWidth: 1,
     borderColor: colors.blue200,
@@ -9981,23 +9982,23 @@ const styles = StyleSheet.create({
     color: colors.danger
   },
   fixedLessonEditor: {
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.blue50,
     borderWidth: 1,
     borderColor: colors.blue200,
-    padding: 12,
-    gap: 10
+    padding: spacing.md,
+    gap: spacing.md
   },
   fixedLessonManageList: {
     gap: 8
   },
   fixedLessonManageRow: {
-    minHeight: 62,
-    borderRadius: 8,
+    minHeight: 68,
+    borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.line,
-    padding: 10,
+    padding: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10
@@ -10046,8 +10047,8 @@ const styles = StyleSheet.create({
   },
   lessonCapacityButton: {
     flex: 1,
-    minHeight: 42,
-    borderRadius: 8,
+    minHeight: 48,
+    borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.blue200,
@@ -10095,7 +10096,7 @@ const styles = StyleSheet.create({
     marginTop: 3
   },
   inlineInstructorInput: {
-    minHeight: 38,
+    minHeight: 48,
     paddingHorizontal: 10,
     fontSize: 14
   },
@@ -10120,7 +10121,7 @@ const styles = StyleSheet.create({
     fontWeight: '900'
   },
   input: {
-    minHeight: 48,
+    minHeight: 52,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.line,
@@ -10147,7 +10148,7 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     flex: 1,
-    minHeight: 46,
+    minHeight: 52,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.blue700,
@@ -10163,7 +10164,7 @@ const styles = StyleSheet.create({
   },
   publishButton: {
     flex: 1,
-    minHeight: 46,
+    minHeight: 52,
     borderRadius: radius.md,
     backgroundColor: colors.blue700,
     alignItems: 'center',
@@ -10187,12 +10188,12 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 480,
     maxHeight: '88%',
-    borderRadius: radius.md,
+    borderRadius: radius.xl,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.line,
-    padding: spacing.md,
-    gap: spacing.md,
+    padding: spacing.lg,
+    gap: spacing.lg,
     ...shadows.floating
   },
   modalHeader: {
@@ -10208,8 +10209,8 @@ const styles = StyleSheet.create({
     fontWeight: '900'
   },
   modalCloseButton: {
-    width: 38,
-    height: 38,
+    width: 48,
+    height: 48,
     borderRadius: radius.md,
     backgroundColor: colors.aqua100,
     borderWidth: 1,
@@ -10280,8 +10281,8 @@ const styles = StyleSheet.create({
   },
   alertHero: {
     backgroundColor: colors.blue700,
-    borderRadius: radius.md,
-    padding: spacing.lg,
+    borderRadius: radius.xl,
+    padding: spacing.xl,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14
@@ -10294,7 +10295,7 @@ const styles = StyleSheet.create({
   },
   preferenceRow: {
     backgroundColor: colors.card,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.line,
     padding: spacing.lg,
@@ -10339,8 +10340,8 @@ const styles = StyleSheet.create({
   },
   profileCard: {
     backgroundColor: colors.card,
-    borderRadius: radius.md,
-    padding: spacing.lg,
+    borderRadius: radius.xl,
+    padding: spacing.xl,
     borderWidth: 1,
     borderColor: colors.line,
     flexDirection: 'row',
@@ -10351,7 +10352,7 @@ const styles = StyleSheet.create({
   avatar: {
     width: 62,
     height: 62,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     backgroundColor: colors.blue700,
     alignItems: 'center',
     justifyContent: 'center'
@@ -10375,7 +10376,7 @@ const styles = StyleSheet.create({
   },
   infoList: {
     backgroundColor: colors.card,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.line,
     overflow: 'hidden',
@@ -10383,7 +10384,7 @@ const styles = StyleSheet.create({
   },
   devSwitchCard: {
     backgroundColor: colors.card,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.blue200,
     padding: 14,
@@ -10402,8 +10403,8 @@ const styles = StyleSheet.create({
     fontWeight: '900'
   },
   infoRow: {
-    minHeight: 58,
-    paddingHorizontal: 16,
+    minHeight: 64,
+    paddingHorizontal: spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
@@ -10424,7 +10425,7 @@ const styles = StyleSheet.create({
     fontWeight: '700'
   },
   logoutButton: {
-    minHeight: 50,
+    minHeight: 54,
     borderRadius: radius.md,
     backgroundColor: colors.white,
     borderWidth: 1,
@@ -10441,7 +10442,7 @@ const styles = StyleSheet.create({
     fontWeight: '900'
   },
   deleteAccountButton: {
-    minHeight: 50,
+    minHeight: 54,
     borderRadius: radius.md,
     backgroundColor: colors.dangerBg,
     borderWidth: 1,
@@ -10459,22 +10460,23 @@ const styles = StyleSheet.create({
   },
   tabBar: {
     position: 'absolute',
-    left: 12,
-    right: 12,
-    bottom: 12,
-    minHeight: 68,
-    borderRadius: radius.md,
+    left: spacing.lg,
+    right: spacing.lg,
+    bottom: spacing.lg,
+    minHeight: 72,
+    borderRadius: radius.xl,
     backgroundColor: colors.card,
     borderWidth: 1,
-    borderColor: colors.blue200,
+    borderColor: colors.line,
     flexDirection: 'row',
-    padding: 7,
-    gap: 6,
+    padding: 8,
+    gap: 8,
     ...shadows.floating
   },
   tabItem: {
     flex: 1,
-    borderRadius: radius.md,
+    minHeight: 54,
+    borderRadius: radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 3,
@@ -10482,7 +10484,7 @@ const styles = StyleSheet.create({
     borderColor: 'transparent'
   },
   tabItemActive: {
-    backgroundColor: colors.aqua100,
+    backgroundColor: colors.blue50,
     borderColor: colors.blue200
   },
   tabLabel: {

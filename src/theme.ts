@@ -1,54 +1,56 @@
 export const colors = {
-  blue900: '#063747',
-  blue800: '#075E74',
-  blue700: '#0789A8',
-  blue600: '#16B8D3',
-  blue200: '#A8E7F3',
-  blue100: '#DDF8FE',
-  blue50: '#F2FCFE',
-  aqua500: '#18C9D8',
-  aqua100: '#D8FAFD',
-  navyLine: 'rgba(221, 247, 250, 0.12)',
-  navyLineStrong: 'rgba(221, 247, 250, 0.22)',
-  navyGlass: 'rgba(255, 255, 255, 0.10)',
-  navyGlassStrong: 'rgba(221, 247, 250, 0.14)',
-  navyDot: 'rgba(255, 255, 255, 0.32)',
+  blue900: '#0F365E',
+  blue800: '#175C93',
+  blue700: '#1685C7',
+  blue600: '#38BDF8',
+  blue200: '#BFE8FA',
+  blue100: '#E4F6FE',
+  blue50: '#F4FBFF',
+  aqua500: '#38BDF8',
+  aqua100: '#EAF8FF',
+  navyLine: 'rgba(15, 54, 94, 0.08)',
+  navyLineStrong: 'rgba(15, 54, 94, 0.14)',
+  navyGlass: 'rgba(22, 133, 199, 0.08)',
+  navyGlassStrong: 'rgba(22, 133, 199, 0.14)',
+  navyDot: 'rgba(22, 133, 199, 0.28)',
   white: '#FFFFFF',
-  ink: '#0E2A35',
-  inkSoft: '#315B67',
-  muted: '#6B8390',
-  line: '#D2EAF1',
-  lineStrong: '#9DD8E6',
-  success: '#138653',
-  successText: '#0C6A41',
-  successBg: '#E9F7EF',
-  successLine: '#BFE8D1',
-  warning: '#D89118',
-  warningText: '#8A5A0A',
-  warningBg: '#FFF4DB',
-  warningLine: '#F0D49B',
-  danger: '#C94040',
-  dangerText: '#A12F2F',
-  dangerBg: '#FFF1F1',
-  dangerLine: '#F1C7C7',
-  surface: '#F1FBFE',
-  surfaceAlt: '#E8F7FB',
+  ink: '#101828',
+  inkSoft: '#344054',
+  muted: '#667085',
+  line: '#E5EAF0',
+  lineStrong: '#D0D9E2',
+  success: '#1685C7',
+  successText: '#175C93',
+  successBg: '#EFF8FF',
+  successLine: '#BFE8FA',
+  warning: '#667085',
+  warningText: '#344054',
+  warningBg: '#F8FAFC',
+  warningLine: '#E5EAF0',
+  danger: '#344054',
+  dangerText: '#344054',
+  dangerBg: '#F8FAFC',
+  dangerLine: '#D0D9E2',
+  surface: '#F7FBFE',
+  surfaceAlt: '#EEF6FB',
   card: '#FFFFFF',
-  overlay: 'rgba(11, 47, 58, 0.38)'
+  overlay: 'rgba(16, 24, 40, 0.34)'
 };
 
 export const spacing = {
   xs: 4,
   sm: 8,
   md: 12,
-  lg: 16,
-  xl: 20,
-  xxl: 24
+  lg: 20,
+  xl: 24,
+  xxl: 32
 };
 
 export const radius = {
-  sm: 6,
-  md: 8
+  sm: 12,
+  md: 18,
+  lg: 20,
+  xl: 24
 };
 
 export const typography = {
@@ -57,43 +59,43 @@ export const typography = {
     lineHeight: 16
   },
   body: {
-    fontSize: 14,
-    lineHeight: 20
-  },
-  button: {
-    fontSize: 14,
-    lineHeight: 18
-  },
-  sectionTitle: {
-    fontSize: 17,
+    fontSize: 15,
     lineHeight: 22
   },
+  button: {
+    fontSize: 15,
+    lineHeight: 20
+  },
+  sectionTitle: {
+    fontSize: 18,
+    lineHeight: 24
+  },
   screenTitle: {
-    fontSize: 20,
-    lineHeight: 26
+    fontSize: 22,
+    lineHeight: 28
   }
 };
 
 export const shadows = {
   soft: {
-    shadowColor: '#0B2F3A',
+    shadowColor: '#0F365E',
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.05,
-    shadowRadius: 14,
+    shadowOpacity: 0.035,
+    shadowRadius: 18,
     elevation: 2
   },
   card: {
-    shadowColor: '#0B2F3A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.035,
-    shadowRadius: 8,
+    shadowColor: '#0F365E',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.025,
+    shadowRadius: 12,
     elevation: 1
   },
   floating: {
-    shadowColor: '#0B2F3A',
+    shadowColor: '#0F365E',
     shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.1,
-    shadowRadius: 18,
-    elevation: 4
+    shadowOpacity: 0.055,
+    shadowRadius: 22,
+    elevation: 3
   }
 };
