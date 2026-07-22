@@ -10,3 +10,5 @@ yarn-error.log*
 !.env.example
 .DS_Store
 output/
+artifacts/*.aab
+store-assets/

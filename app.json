@@ -24,7 +24,8 @@
     },
     "android": {
       "package": "com.oneuldoswim.app",
-      "versionCode": 2,
+      "versionCode": 4,
+      "softwareKeyboardLayoutMode": "resize",
       "blockedPermissions": [
         "android.permission.RECORD_AUDIO"
       ]

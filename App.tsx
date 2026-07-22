@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Linking,
   Modal,
@@ -285,15 +286,13 @@ function formatFixedLessonSummary(fixedLessons: FixedLesson[]) {
   return hiddenCount > 0 ? `${visibleLessons.join(' · ')} 외 ${hiddenCount}개` : visibleLessons.join(' · ');
 }
 
-function KeyboardAwareScrollView({
-  children,
-  keyboardDismissMode,
-  keyboardShouldPersistTaps,
-  automaticallyAdjustKeyboardInsets,
-  ...props
-}: ScrollViewProps) {
+const KeyboardAwareScrollView = React.forwardRef<ScrollView, ScrollViewProps>(function KeyboardAwareScrollView(
+  { children, keyboardDismissMode, keyboardShouldPersistTaps, automaticallyAdjustKeyboardInsets, ...props },
+  ref
+) {
   return (
     <ScrollView
+      ref={ref}
       keyboardDismissMode={keyboardDismissMode ?? defaultKeyboardDismissMode}
       keyboardShouldPersistTaps={keyboardShouldPersistTaps ?? 'handled'}
       automaticallyAdjustKeyboardInsets={automaticallyAdjustKeyboardInsets ?? Platform.OS === 'ios'}
@@ -302,7 +301,7 @@ function KeyboardAwareScrollView({
       {children}
     </ScrollView>
   );
-}
+});
 
 function WeekdaySelector({ value, onChange }: { value: number; onChange: (weekday: number) => void }) {
   return (
@@ -1710,6 +1709,30 @@ function LoginScreen({
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const loginScrollRef = useRef<ScrollView>(null);
+  const passwordFocusedRef = useRef(false);
+
+  function revealPasswordActions() {
+    setTimeout(() => loginScrollRef.current?.scrollToEnd({ animated: true }), Platform.OS === 'ios' ? 280 : 180);
+  }
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSubscription = Keyboard.addListener(showEvent, () => {
+      setKeyboardVisible(true);
+      if (passwordFocusedRef.current) {
+        revealPasswordActions();
+      }
+    });
+    const hideSubscription = Keyboard.addListener(hideEvent, () => setKeyboardVisible(false));
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
 
   async function signInWithCredentials(nextEmail: string, nextPassword: string) {
     await onSignIn(nextEmail, nextPassword);
@@ -1766,21 +1789,31 @@ function LoginScreen({
     <SafeAreaView style={styles.loginSafeArea}>
       <StatusBar barStyle="dark-content" />
       <KeyboardAvoidingView style={styles.keyboardAvoidingView} behavior={keyboardAvoidingBehavior}>
-        <KeyboardAwareScrollView contentContainerStyle={styles.loginScrollContent} showsVerticalScrollIndicator={false}>
-          <View style={styles.loginHero}>
-            <Image source={brandLogoImage} style={styles.loginHeroImage} resizeMode="contain" />
+        <KeyboardAwareScrollView
+          ref={loginScrollRef}
+          contentContainerStyle={[styles.loginScrollContent, keyboardVisible && styles.loginScrollContentKeyboard]}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={[styles.loginHero, keyboardVisible && styles.loginHeroKeyboard]}>
+            <Image
+              source={brandLogoImage}
+              style={[styles.loginHeroImage, keyboardVisible && styles.loginHeroImageKeyboard]}
+              resizeMode="contain"
+            />
             {/* <Text style={styles.loginTitle}>오늘도수영</Text> */}
-            <View style={styles.loginIconRow}>
-              <View style={styles.loginIconChip}>
-                <Feather name="calendar" size={18} color={colors.blue900} />
+            {keyboardVisible ? null : (
+              <View style={styles.loginIconRow}>
+                <View style={styles.loginIconChip}>
+                  <Feather name="calendar" size={18} color={colors.blue900} />
+                </View>
+                <View style={styles.loginIconChip}>
+                  <Feather name="bell" size={18} color={colors.blue900} />
+                </View>
+                <View style={styles.loginIconChip}>
+                  <Feather name="credit-card" size={18} color={colors.blue900} />
+                </View>
               </View>
-              <View style={styles.loginIconChip}>
-                <Feather name="bell" size={18} color={colors.blue900} />
-              </View>
-              <View style={styles.loginIconChip}>
-                <Feather name="credit-card" size={18} color={colors.blue900} />
-              </View>
-            </View>
+            )}
           </View>
 
           <View style={styles.loginPanel}>
@@ -1862,6 +1895,13 @@ function LoginScreen({
             secureTextEntry
             textContentType={mode === 'signup' ? 'newPassword' : 'password'}
             returnKeyType="done"
+            onFocus={() => {
+              passwordFocusedRef.current = true;
+              revealPasswordActions();
+            }}
+            onBlur={() => {
+              passwordFocusedRef.current = false;
+            }}
             onSubmitEditing={submit}
           />
 
@@ -8055,14 +8095,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing.xl
   },
+  loginScrollContentKeyboard: {
+    justifyContent: 'flex-start',
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    gap: spacing.sm
+  },
   loginHero: {
     minHeight: 190,
     justifyContent: 'center',
     alignItems: 'center'
   },
+  loginHeroKeyboard: {
+    minHeight: 64
+  },
   loginHeroImage: {
     width: 220,
     height: 164
+  },
+  loginHeroImageKeyboard: {
+    width: 128,
+    height: 64
   },
   loginTitle: {
     ...type.extraBold,
